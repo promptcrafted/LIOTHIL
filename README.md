@@ -83,22 +83,7 @@ The research environment that produced LIOTHIL — the Falco Trump Isopsephy Pro
 
 ## Security
 
-LIOTHIL takes secret exposure seriously. The repo ships with:
-
-- **[gitleaks](https://github.com/gitleaks/gitleaks) pre-commit hook** — scans every commit for accidentally included API keys, tokens, passwords, and private keys. Catches secrets before they enter git history.
-- **Security-first `.gitignore`** — blocks `.env` files, credential patterns, private keys, cloud provider configs, and Claude Code local configs by default.
-- **`SECURITY.md`** — vulnerability disclosure policy with 72-hour response commitment.
-
-**After LIOTHIL bootstraps your environment**, install the pre-commit hooks in your new project:
-
-```bash
-pip install pre-commit
-pre-commit install
-```
-
-This is the single most important security step you can take. 85% of organizations have plaintext secrets in their repos ([Orca Security, 2025](https://orca.security/resources/blog/source-code-security-best-practices/)). A pre-commit hook makes you the other 15%.
-
-**If you've already committed a secret:** Rotating the credential is mandatory. Removing it from future commits is not enough — it remains in git history. See [GitHub's guide on removing sensitive data](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository).
+This repo ships with [gitleaks](https://github.com/gitleaks/gitleaks) pre-commit hooks and a security-first `.gitignore`. After bootstrapping your environment, run `pip install pre-commit && pre-commit install` to activate secret scanning. See `SECURITY.md` for the disclosure policy.
 
 ## Requirements
 
