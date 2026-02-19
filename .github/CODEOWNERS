@@ -1,0 +1,13 @@
+# LIOTHIL Code Owners
+# These users are automatically requested for review on PRs
+# that modify files matching the patterns.
+
+# Default owner for everything
+* @timm156
+
+# Security-critical files require owner review
+CLAUDE.md @timm156
+SECURITY.md @timm156
+.pre-commit-config.yaml @timm156
+.gitignore @timm156
+.github/CODEOWNERS @timm156
