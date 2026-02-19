@@ -77,8 +77,6 @@ LIOTHIL encodes domain-agnostic research architecture distilled from a productio
 
 LIOTHIL is a word in the Sacred Language of Damanhur, a spiritual community in northern Italy. It means "The Helper" — the first of five falcon entities described in the tradition as spirits of divine assistance that descend when an operation is properly established.
 
-Its isopsephic value is 458, standing one step beyond Thoth (457), the Egyptian god of writing, measurement, and sacred record-keeping. Not Thoth himself, but what Thoth becomes when refracted through a new symbolic system. A helper for building the systems that organize knowledge.
-
 The research environment that produced LIOTHIL — the Falco Trump Isopsephy Project — is a computational analysis of Sacred Language inscriptions on a Continental Tarot deck. LIOTHIL carries none of that domain content. It carries only the architectural wisdom: the patterns that made the research rigorous, the operational discipline that prevented errors, the structural decisions that let the work scale.
 
 ## Security
