@@ -14,14 +14,15 @@ jobs:
     name: Secret Detection
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
 
       - name: Install gitleaks
         run: |
-          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.2/gitleaks_8.24.2_linux_x64.tar.gz | tar xz
-          chmod +x gitleaks
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.0/gitleaks_8.30.0_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz
+          tar xzf /tmp/gitleaks.tar.gz -C /tmp
+          chmod +x /tmp/gitleaks
 
       - name: Run gitleaks
-        run: ./gitleaks detect --source . --verbose --redact
+        run: /tmp/gitleaks detect --source . --verbose --redact

@@ -46,8 +46,8 @@ This installs gitleaks secret scanning. **Every commit is scanned for accidental
 
 ## Code of Conduct
 
-Be respectful. Be constructive. The patterns in this tool were earned through real research failures and corrections. Treat contributions with the same rigor.
+This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md). Be respectful. Be constructive.
 
 ## Questions?
 
-Open a Discussion on GitHub or reach out to the maintainers.
+Open an [issue](https://github.com/promptcrafted/LIOTHIL/issues) or reach out to the maintainers.

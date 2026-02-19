@@ -1,25 +1,9 @@
-# ===========================
-# LIOTHIL Security-First .gitignore
-# ===========================
-
-# --- Secrets & Credentials (CRITICAL) ---
-# These patterns are your first line of defense.
-# Belt AND suspenders: gitleaks pre-commit hook is the second.
+# --- Secrets & Credentials ---
 
 # Environment files
 .env
 .env.*
 !.env.example
-*.env
-
-# API keys and tokens
-*secret*
-*token*
-*credential*
-*api_key*
-*apikey*
-!SECURITY.md
-!**/docs/*
 
 # Private keys and certificates
 *.pem
@@ -30,7 +14,6 @@
 *.keystore
 id_rsa*
 id_ed25519*
-*.pub
 
 # OAuth and auth files
 .htpasswd
@@ -48,11 +31,8 @@ terraform.tfvars
 *.tfstate
 *.tfstate.*
 
-# --- Claude Code Sensitive Files ---
-# CLAUDE.local.md contains machine-specific config (GPU, paths)
-# and should never be shared
+# --- Claude Code ---
 CLAUDE.local.md
-.claude/talisman/
 
 # --- Python ---
 __pycache__/
@@ -78,12 +58,13 @@ yarn-error.log*
 package-lock.json
 
 # --- Generated Environments ---
-# After LIOTHIL bootstraps, these are user-specific
+# LIOTHIL creates these during bootstrap; they belong in the
+# user's project, not in this scaffold repo.
 source/
 results/
 tools/
 
-# --- OS Artifacts ---
+# --- OS & Editor ---
 .DS_Store
 Thumbs.db
 desktop.ini
@@ -91,18 +72,14 @@ desktop.ini
 *.swo
 *~
 nul
-
-# --- IDE ---
 .vscode/
 .idea/
 *.sublime-project
 *.sublime-workspace
 
-# --- Logs ---
+# --- Logs & Temp ---
 *.log
 logs/
-
-# --- Misc ---
 *.bak
 *.tmp
 *.temp

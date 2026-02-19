@@ -3,6 +3,10 @@
 
 # LIOTHIL
 
+[![CI](https://github.com/promptcrafted/LIOTHIL/actions/workflows/security.yml/badge.svg)](https://github.com/promptcrafted/LIOTHIL/actions/workflows/security.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit)](https://github.com/pre-commit/pre-commit)
+
 **A research environment scaffold for Claude Code.**
 
 LIOTHIL builds structured, epistemically disciplined AI research environments from a single conversation. You bring your domain. LIOTHIL builds the architecture. Your research partner grows from there.
@@ -81,7 +85,7 @@ The research environment that produced LIOTHIL — the Falco Trump Isopsephy Pro
 
 ## Security
 
-This repo ships with [gitleaks](https://github.com/gitleaks/gitleaks) pre-commit hooks and a security-first `.gitignore`. After bootstrapping your environment, run `pip install pre-commit && pre-commit install` to activate secret scanning. See `SECURITY.md` for the disclosure policy.
+If you're contributing to LIOTHIL itself, run `pip install pre-commit && pre-commit install` to activate [gitleaks](https://github.com/gitleaks/gitleaks) secret scanning. See `SECURITY.md` for the disclosure policy.
 
 ## Requirements
 
