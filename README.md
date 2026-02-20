@@ -18,6 +18,7 @@ Drop this project's `CLAUDE.md` into an empty directory, open Claude Code, and L
 - **An analysis protocol** with phased workflows and verification gates
 - **An evidence grading system** calibrated to your field's standards
 - **Agent definitions** for specialized analytical and verification tasks
+- **Skill definitions** for repeatable workflow orchestration
 - **An editorial watchlist** that learns from your corrections
 - **A directory structure** that separates source material from analytical output
 
@@ -52,9 +53,13 @@ your-project/
 │   │   ├── evidence-grading.md        # Tier system for findings
 │   │   ├── source-attribution.md      # Provenance tagging rules
 │   │   └── editorial-watchlist.md     # Error pattern tracking
-│   └── agents/
-│       ├── analyst.md                 # Primary analytical agent
-│       └── verifier.md               # Adversarial verification agent
+│   ├── agents/
+│   │   ├── analyst.md                 # Primary analytical agent
+│   │   └── verifier.md               # Adversarial verification agent
+│   └── skills/
+│       ├── analyze/SKILL.md           # Analysis orchestration workflow
+│       ├── verify/SKILL.md            # Adversarial verification workflow
+│       └── compute/SKILL.md           # Quick computation (if applicable)
 ├── source/                            # Primary sources go here
 ├── results/                           # Analytical output goes here
 └── tools/                             # Computation scripts (if applicable)
@@ -75,6 +80,8 @@ LIOTHIL encodes domain-agnostic research architecture distilled from a productio
 **Editorial Watchlist** — Institutional memory of identified errors. When a mistake is found, it's documented with detection patterns and swept across the corpus. The immune system learns.
 
 **Structured Output** — Machine-readable results blocks that prevent summarization corruption. The block is authoritative; anything that contradicts it is a reporting error.
+
+**Skill Orchestration** — Repeatable workflows encoded as invocable skills. Skills manage the hub's orchestration sequence: what to pre-compute, which agents to dispatch, what checkpoints to verify. `/analyze` runs the full protocol. `/verify` runs adversarial checks. Skills reference agents and rules without duplicating them.
 
 ## The Name
 

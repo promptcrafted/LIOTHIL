@@ -50,6 +50,11 @@ Listen for: natural tier boundaries. Most domains have something like: verified/
 
 Listen for: existing scripts/tools, external APIs, databases, verification procedures. This determines the tools directory and the verification gates in the analysis protocol.
 
+**4b. The Workflows**
+> Walk me through your most common analytical workflow, start to finish. What steps do you repeat every time? Where do you need to stop and check before continuing? Where do things go wrong?
+
+Listen for: sequential phases with dependencies, hard gates (steps that MUST happen before proceeding), checkpoint patterns, common failure modes, orchestration complexity. This seeds the skill definitions. Most research domains have at least two repeatable workflows: an analysis workflow and a verification workflow. If the user describes a single-pass workflow, probe for where verification happens — it almost always exists even if implicit.
+
 **5. The Investigator**
 > Tell me about yourself. What's your background? What expertise do you bring? What are you building toward?
 
@@ -100,6 +105,11 @@ Generate files in this order, confirming with the user after each major group:
 9. `source/` directory — For primary sources
 10. `results/` directory — For analytical output
 11. `tools/` directory — For computation scripts (if applicable)
+
+**Group 5: Skills**
+12. `.claude/skills/analyze/SKILL.md` — Primary analysis orchestration
+13. `.claude/skills/verify/SKILL.md` — Adversarial verification
+14. `.claude/skills/compute/SKILL.md` — Quick computation (if tools exist)
 
 ---
 
@@ -441,6 +451,174 @@ Verdict: PASS / FAIL
 4. A PASS verdict means every checked claim held. A FAIL means at least one didn't.
 ```
 
+### Template 8: analyze skill (Primary Analysis Orchestration)
+
+Skills use YAML frontmatter for auto-detection: `name` (kebab-case, required) and `description` (what + when + trigger phrases, required). The body contains sequential workflow steps.
+
+```markdown
+---
+name: analyze
+description: |
+  Orchestrate the full analysis protocol for a single [unit].
+  Use when: "analyze [unit]", "new analysis", "run the protocol on [unit]".
+  Manages hub orchestration: pre-computation, agent dispatch, verification,
+  and index updates. Skills orchestrate; agents execute; rules inform.
+---
+
+# Analysis Orchestration
+
+This skill manages the hub's workflow for analyzing a single [unit]. The `analyst` agent
+executes the phases; this skill handles pre-computation, hard gate enforcement, dispatch,
+verification, and index updates.
+
+**Hub-and-spoke constraint:** MCP tools (if configured) are available ONLY to the hub.
+Background agents cannot call MCP tools directly. Pre-compute all values and pass them
+to the agent in the dispatch prompt.
+
+## Step 0: Pre-Flight
+
+1. Identify the [unit] from user input
+2. Check for prior analysis at `results/[unit-id]/`
+3. Confirm with the user if this is fresh analysis or revision
+
+## Step 1: Pre-Computation
+
+[If tools exist] Run required computations before dispatching agents:
+- [Domain-specific computation steps]
+- Collect all results into a structured data block
+
+## Step 2: Source Pre-Read (HARD GATE)
+
+Read [primary source file] BEFORE proceeding. This step is non-negotiable.
+If the source file cannot be found, STOP and report.
+
+[Domain-specific hard gate instructions]
+
+## Step 3: Construct Agent Prompt
+
+Build the `analyst` dispatch prompt containing:
+- All pre-computed data from Step 1
+- Source reference results from Step 2
+- **Explicit file paths** for every required read (do NOT say "check the sources"
+  without exact paths — see operational principles)
+- [Unit]-specific parameters and output directory
+
+## Step 4: Dispatch Analyst
+
+Launch the `analyst` agent with the constructed prompt.
+One [unit] per agent session. Wait for the structured results block.
+
+## Step 5: Verification Checkpoint
+
+Read the agent's output. Compare the structured results block against
+pre-computed data from Step 1. Flag any discrepancy.
+Optionally dispatch the `verifier` agent for independent verification.
+
+## Step 6: Index Updates
+
+After verification: update tracking documents with new findings.
+Flag implications for previously analyzed [units].
+
+## Step 7: Report
+
+Present findings with the structured results block **quoted verbatim**.
+Never paraphrase values from conversational memory — re-read the source.
+```
+
+### Template 9: verify skill (Adversarial Verification)
+
+```markdown
+---
+name: verify
+description: |
+  Run adversarial verification on a completed analysis.
+  Use when: "verify", "audit", "check the analysis", "adversarial check".
+  Dispatches the verifier agent for independent re-derivation.
+---
+
+# Adversarial Verification
+
+This skill runs independent verification of analytical claims. The `verifier` agent
+re-derives findings from primary data with no access to prior conclusions.
+
+## Step 0: Identify Target
+
+Determine which analysis to verify from user input or most recent completion.
+Read the target analysis file. Locate the structured results block.
+
+## Step 1: Hub Reference Pre-Computation
+
+Pre-compute reference values independently using available tools.
+This gives the hub a third independent check alongside analyst and verifier.
+
+## Step 2: Construct Verifier Prompt
+
+Build the `verifier` dispatch prompt containing:
+- The analysis file path to verify
+- The structured results block to check
+- The verification checklist:
+  1. Source coverage: did the analysis consult required sources?
+  2. Methodology compliance: was the protocol followed?
+  3. Claim-evidence alignment: does each finding merit its grade?
+  4. Scope compliance: did the analysis stay within bounds?
+- Explicit file paths for evidence grading rules and source files
+- Output directory for the audit report
+
+## Step 3: Dispatch Verifier
+
+Launch the `verifier` agent. Wait for the structured audit block.
+
+## Step 4: Evaluate Audit Report
+
+Read the audit block. Cross-check against hub reference values.
+Classify discrepancies: computation error, coverage gap, grading dispute, tool issue.
+
+## Step 5: Report
+
+Present audit results with the structured audit block quoted verbatim.
+For discrepancies, show all independent values so the investigator can evaluate.
+```
+
+### Template 10: compute skill (Quick Computation — if tools exist)
+
+Only generate this skill if the interview reveals computational tools. If the domain
+has no computation component, skip this template.
+
+```markdown
+---
+name: compute
+description: |
+  Quick computation and lookup for a single value, word, or expression.
+  Use when: "compute", "calculate", "what's the value of", or any ad-hoc
+  computation request that doesn't need the full analysis protocol.
+---
+
+# Quick Computation
+
+A lightweight workflow for ad-hoc computation. Produces the result with
+immediate context — without the full phased analysis protocol.
+
+## Step 1: Parse Input
+
+Extract the target from the user's request.
+
+## Step 2: Compute
+
+Run the computation tool on the input.
+Show all variants if applicable.
+Show the step-by-step breakdown.
+
+## Step 3: Context
+
+- Check against [primary reference file] for known entries
+- Note any special properties of the result
+- Report related findings if relevant
+
+## Step 4: Report
+
+Present results in structured format with all variants shown.
+```
+
 ---
 
 ## PHASE 3 — THE TRANSITION
@@ -488,6 +666,14 @@ When new primary sources are added:
 2. Update the "What You Know" section of CLAUDE.md
 3. Update analysis protocol if new source types require new phases
 4. Existing analyses may need revisiting — flag them
+
+### The Skill Pattern
+When a multi-step workflow recurs across 3+ sessions:
+1. Create `.claude/skills/[workflow-name]/SKILL.md`
+2. YAML frontmatter: `name` (kebab-case), `description` (WHAT + WHEN + trigger phrases)
+3. Body: sequential steps, hard gates, agent references, checkpoint criteria
+4. Skills orchestrate. Agents execute. Rules inform.
+5. Reference rules and agents by file path — never duplicate their content into the skill
 
 ---
 
