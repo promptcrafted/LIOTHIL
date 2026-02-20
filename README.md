@@ -1,5 +1,4 @@
-<!-- ![LIOTHIL](assets/banner.png) -->
-<!-- Uncomment the line above once banner.png is created -->
+![LIOTHIL](banner.png)
 
 # LIOTHIL
 
