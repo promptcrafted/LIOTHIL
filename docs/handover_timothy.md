@@ -35,11 +35,13 @@
 | 7 | Training Infrastructure + Differential MoE | 235 | COMPLETE |
 | 8 | Wan Model Implementations | 256 | COMPLETE |
 | — | RunPod Training Scripts | — | READY |
+| — | Code Review Fixes (8 items) | — | DONE |
 | **Total** | | **1857** | |
 
 ### What's NOT Done Yet
 
 - **GPU validation** — The full pipeline (encoding + training) has not been tested end-to-end on GPU yet. All 1857 tests are GPU-free mocks. First RunPod run will be the real validation.
+- **Code review remaining items** — Hardcoded Windows paths in `scripts/` (fix for release) and hardcoded tokenizer HuggingFace fetch in `encoding/text_encoder.py` (fix for airgapped use). See `code-review-2026-02-24.md` for details.
 - **Phase 9** — Differential MoE training strategy as a first-class feature (the infrastructure supports it, but hasn't been validated end-to-end on GPU).
 - **Phase 10** — Control signal expansion (depth/edge/pose + control LoRA training).
 - **Phase 11+** — LTX, SkyReels, audio signals, VACE support.
