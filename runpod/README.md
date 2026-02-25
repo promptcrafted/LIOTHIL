@@ -118,11 +118,11 @@ bash /workspace/dimljus/runpod/setup.sh
 | Setting | High-Noise | Low-Noise |
 |---------|-----------|-----------|
 | Learning Rate | 1e-4 | 8e-5 |
-| LoRA Rank | 16 | 24 |
-| LoRA Alpha | 16 | 24 |
+| LoRA Rank | 16 | 16 |
+| LoRA Alpha | 16 | 16 |
 | Max Epochs | 30 | 50 |
 | Save Every | 5 | 5 |
 
-Shared: adamw8bit optimizer, polynomial scheduler, 0.01 weight decay, seed 42.
+Shared: adamw8bit optimizer, cosine_with_min_lr scheduler, 0.01 weight decay, seed 42.
 
 T2V: flow shift 3.0, boundary 875. I2V: flow shift 5.0, boundary 900.

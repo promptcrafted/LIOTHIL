@@ -135,12 +135,12 @@ python /workspace/dimljus/runpod/train.py --variant t2v --noise_level high \
 | Setting | High-Noise Expert | Low-Noise Expert |
 |---------|-------------------|------------------|
 | Learning Rate | 1e-4 | 8e-5 |
-| LoRA Rank | 16 | 24 |
-| LoRA Alpha | 16 | 24 |
+| LoRA Rank | 16 | 16 |
+| LoRA Alpha | 16 | 16 |
 | Max Epochs | 30 | 50 |
 | Save Every | 5 epochs | 5 epochs |
 
-Shared: adamw8bit, polynomial scheduler, 0.01 weight decay, seed 42.
+Shared: adamw8bit, cosine_with_min_lr scheduler, 0.01 weight decay, seed 42.
 T2V: flow shift 3.0, boundary 875. I2V: flow shift 5.0, boundary 900.
 
 ### After Pod Restart

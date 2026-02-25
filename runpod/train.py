@@ -65,8 +65,8 @@ VARIANT_CONFIG = {
             },
             "low": {
                 "learning_rate": "8e-5",
-                "rank": "24",
-                "alpha": "24",
+                "rank": "16",
+                "alpha": "16",
                 "max_epochs": "50",
                 "save_every": "5",
             },
@@ -87,8 +87,8 @@ VARIANT_CONFIG = {
             },
             "low": {
                 "learning_rate": "8e-5",
-                "rank": "24",
-                "alpha": "24",
+                "rank": "16",
+                "alpha": "16",
                 "max_epochs": "50",
                 "save_every": "5",
             },
@@ -98,8 +98,7 @@ VARIANT_CONFIG = {
 
 # --- Shared Defaults ---
 OUTPUT_NAME         = "dimljus-wan22"
-LR_SCHEDULER        = "polynomial"
-LR_SCHEDULER_POWER  = "2"
+LR_SCHEDULER        = "cosine_with_min_lr"
 MIN_LR_RATIO        = "0.01"
 OPTIMIZER           = "adamw8bit"
 SEED                = "42"
@@ -352,7 +351,6 @@ def train_expert(args, variant, noise_level):
     # --- Resolve hyperparameters (CLI overrides > per-expert defaults) ---
     lr          = args.lr or expert["learning_rate"]
     scheduler   = args.scheduler or LR_SCHEDULER
-    power       = args.power or LR_SCHEDULER_POWER
     min_lr      = args.min_lr or MIN_LR_RATIO
     optimizer   = args.optimizer or OPTIMIZER
     rank        = args.rank or expert["rank"]
@@ -563,7 +561,6 @@ def train_expert(args, variant, noise_level):
         # --- LR Scheduler ---
         "--lr_scheduler", scheduler,
         "--lr_scheduler_min_lr_ratio", min_lr,
-        "--lr_scheduler_power", power,
         # --- Memory ---
         "--gradient_checkpointing",
         "--max_data_loader_n_workers", "2",
@@ -659,7 +656,6 @@ Examples:
     parser.add_argument("--epochs", default=None, help="Max epochs")
     parser.add_argument("--save_every", default=None, help="Save checkpoint every N epochs")
     parser.add_argument("--scheduler", default=None, help=f"LR scheduler (default: {LR_SCHEDULER})")
-    parser.add_argument("--power", default=None, help=f"Scheduler power (default: {LR_SCHEDULER_POWER})")
     parser.add_argument("--min_lr", default=None, help=f"Min LR ratio (default: {MIN_LR_RATIO})")
     parser.add_argument("--optimizer", default=None, help=f"Optimizer (default: {OPTIMIZER})")
     parser.add_argument("--seed", default=None, help=f"Random seed (default: {SEED})")
