@@ -53,6 +53,9 @@ class TrainingLogger:
         # Initialize backends
         self._tb_writer: Any = None
         self._wandb_run: Any = None
+        self._wandb_log_warned: bool = False
+        self._tb_close_warned: bool = False
+        self._wandb_close_warned: bool = False
 
         if "tensorboard" in self._backends and self._output_dir is not None:
             self._init_tensorboard()
@@ -227,8 +230,14 @@ class TrainingLogger:
             try:
                 import wandb
                 wandb.log(prefixed, step=global_step)
-            except Exception:
-                pass  # Don't crash training for logging failures
+            except Exception as e:
+                if not self._wandb_log_warned:
+                    print(
+                        f"  Warning: W&B logging failed ({e}). "
+                        f"Subsequent W&B errors will be suppressed.",
+                        file=sys.stderr,
+                    )
+                    self._wandb_log_warned = True
 
     def log_checkpoint_saved(self, path: Path, phase_type: PhaseType, epoch: int) -> None:
         """Log a checkpoint save event.
@@ -256,12 +265,22 @@ class TrainingLogger:
         if self._tb_writer is not None:
             try:
                 self._tb_writer.close()
-            except Exception:
-                pass
+            except Exception as e:
+                if not self._tb_close_warned:
+                    print(
+                        f"  Warning: TensorBoard close failed ({e}).",
+                        file=sys.stderr,
+                    )
+                    self._tb_close_warned = True
 
         if self._wandb_run is not None:
             try:
                 import wandb
                 wandb.finish()
-            except Exception:
-                pass
+            except Exception as e:
+                if not self._wandb_close_warned:
+                    print(
+                        f"  Warning: W&B finish failed ({e}).",
+                        file=sys.stderr,
+                    )
+                    self._wandb_close_warned = True

@@ -78,6 +78,17 @@ nul
 *.sublime-project
 *.sublime-workspace
 
+# --- ML Artifacts ---
+*.safetensors
+*.pt
+*.ckpt
+*.bin
+*.onnx
+checkpoints/
+outputs/
+wandb/
+*.npy
+
 # --- Logs & Temp ---
 *.log
 logs/

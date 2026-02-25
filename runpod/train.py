@@ -183,52 +183,37 @@ def validate_config(config_path: str) -> None:
 
 def run_cache_latents(config_path: str, dry_run: bool = False) -> None:
     """Run latent pre-encoding (VAE)."""
+    from argparse import Namespace
     from dimljus.encoding.__main__ import cmd_cache_latents
 
-    class Args:
-        config = config_path
-        force = False
-
-    args = Args()
-    args.dry_run = dry_run
-
+    args = Namespace(config=config_path, force=False, dry_run=dry_run)
     cmd_cache_latents(args)
 
 
 def run_cache_text(config_path: str, dry_run: bool = False) -> None:
     """Run text pre-encoding (T5)."""
+    from argparse import Namespace
     from dimljus.encoding.__main__ import cmd_cache_text
 
-    class Args:
-        config = config_path
-
-    args = Args()
-    args.dry_run = dry_run
-
+    args = Namespace(config=config_path, dry_run=dry_run)
     cmd_cache_text(args)
 
 
 def run_training(config_path: str, dry_run: bool = False) -> None:
     """Run the dimljus training loop."""
+    from argparse import Namespace
     from dimljus.training.__main__ import cmd_train
 
-    class Args:
-        config = config_path
-
-    args = Args()
-    args.dry_run = dry_run
-
+    args = Namespace(config=config_path, dry_run=dry_run)
     cmd_train(args)
 
 
 def run_plan(config_path: str) -> None:
     """Print the resolved training plan (no GPU needed)."""
+    from argparse import Namespace
     from dimljus.training.__main__ import cmd_plan
 
-    class Args:
-        config = config_path
-
-    cmd_plan(Args())
+    cmd_plan(Namespace(config=config_path))
 
 
 # =============================================================================

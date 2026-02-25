@@ -177,6 +177,14 @@ class WanVaeEncoder:
         target_width = kwargs.get("target_width", 848)
         target_height = kwargs.get("target_height", 480)
         target_frames = kwargs.get("target_frames", 81)
+
+        # VAE requires dimensions to be multiples of 8
+        if target_width % 8 != 0 or target_height % 8 != 0:
+            raise EncoderError(
+                "wan_vae",
+                f"Dimensions must be multiples of 8, got {target_width}x{target_height}. "
+                f"Try {target_width - target_width % 8}x{target_height - target_height % 8} instead."
+            )
         frame_extraction = kwargs.get("frame_extraction", "head")
 
         try:
@@ -282,7 +290,6 @@ class WanVaeEncoder:
 
         # Parse raw bytes into numpy array
         raw = np.frombuffer(result.stdout, dtype=np.uint8)
-        expected_bytes = target_frames * target_height * target_width * 3
         actual_frames = len(raw) // (target_height * target_width * 3)
 
         if actual_frames == 0:

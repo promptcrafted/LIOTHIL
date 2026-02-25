@@ -194,6 +194,10 @@ class TrainingOrchestrator:
         # Save final merged LoRA
         self._save_final()
 
+        # Cleanup inference pipeline if loaded (free VRAM)
+        if self._pipeline is not None and hasattr(self._pipeline, "cleanup"):
+            self._pipeline.cleanup()
+
         # Close logger
         self._logger.close()
 
@@ -438,7 +442,7 @@ class TrainingOrchestrator:
         for name, param in self._model.named_parameters():
             if not param.requires_grad:
                 continue
-            if "lora_B" in name or "lora_up" in name:
+            if ".lora_B." in name or ".lora_up." in name:
                 b_params.append(param)
             else:
                 a_params.append(param)
@@ -934,8 +938,12 @@ class TrainingOrchestrator:
             try:
                 merged = merge_experts(self._high_noise_lora, self._low_noise_lora)
                 merged.save(self._checkpoint_mgr.final_path())
-            except Exception:
-                pass  # Best effort — individual checkpoints are still available
+            except Exception as e:
+                print(
+                    f"  Warning: Expert merge failed ({e}). "
+                    f"Individual phase checkpoints are still available in: "
+                    f"{self._checkpoint_mgr._output_dir}"
+                )
 
         # If only unified exists, save it as final
         elif self._unified_lora is not None:
