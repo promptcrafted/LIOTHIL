@@ -294,10 +294,11 @@ class WanModelBackend:
         inputs["timestep"] = timesteps * self._noise_schedule.num_timesteps
 
         # Text conditioning
+        # Wan's forward() takes encoder_hidden_states but NOT an explicit
+        # attention mask — it builds its own mask internally from the
+        # hidden states. We pass the text embeddings directly.
         if batch.get("text_emb") is not None:
             inputs["encoder_hidden_states"] = batch["text_emb"]
-        if batch.get("text_mask") is not None:
-            inputs["encoder_attention_mask"] = batch["text_mask"]
 
         return inputs
 
