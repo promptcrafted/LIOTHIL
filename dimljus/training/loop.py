@@ -371,6 +371,13 @@ class TrainingOrchestrator:
             dropout=phase.lora_dropout,
         )
 
+        # Re-enable gradient checkpointing after PEFT wrapping.
+        # PEFT's get_peft_model() wraps the model in a PeftModel which
+        # may reset the gradient checkpointing flag. We re-apply it
+        # to the base model inside the PEFT wrapper.
+        if self._config.training.gradient_checkpointing:
+            self._backend.setup_gradient_checkpointing(self._model)
+
         # Inject existing weights (resumption or post-fork)
         if active_lora is not None and active_lora.state_dict:
             inject_lora_state_dict(self._model, active_lora.state_dict)

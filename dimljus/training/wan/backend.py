@@ -335,13 +335,22 @@ class WanModelBackend:
         backward pass instead of storing them. Essential for video
         training where activation memory is enormous.
 
+        Handles both raw WanTransformer3DModel and PEFT-wrapped models.
+        For PEFT models, enables on the base model to ensure the flag
+        reaches the actual transformer blocks.
+
         Args:
-            model: Loaded WanTransformer3DModel.
+            model: Loaded WanTransformer3DModel or PeftModel wrapper.
         """
-        if hasattr(model, "enable_gradient_checkpointing"):
-            model.enable_gradient_checkpointing()
-        elif hasattr(model, "gradient_checkpointing_enable"):
-            model.gradient_checkpointing_enable()
+        # If this is a PEFT-wrapped model, get the actual base model
+        base_model = model
+        if hasattr(model, "get_base_model"):
+            base_model = model.get_base_model()
+
+        if hasattr(base_model, "enable_gradient_checkpointing"):
+            base_model.enable_gradient_checkpointing()
+        elif hasattr(base_model, "gradient_checkpointing_enable"):
+            base_model.gradient_checkpointing_enable()
 
     def get_noise_schedule(self) -> FlowMatchingSchedule:
         """Return the flow matching noise schedule for Wan.
