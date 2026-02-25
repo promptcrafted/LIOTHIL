@@ -3,13 +3,14 @@
 WanInferencePipeline is GPU-dependent, so all tests here are GPU-free.
 They cover:
 
-    1. Constructor attribute storage
-    2. Lazy-load contract (_pipeline is None until generate() is called)
+    1. Constructor attribute storage (individual files, diffusers path, both)
+    2. Lazy-load contract (no GPU/filesystem access at init)
     3. I2V flag handling
-    4. cleanup() safety (no-op when pipeline not loaded, clears when loaded)
+    4. cleanup() safety (no-op when nothing loaded, clears cache)
     5. Protocol compliance with InferencePipeline (@runtime_checkable)
-    6. Error propagation when generate() is called without a real model path
+    6. Error propagation when generate() is called without torch/diffusers
     7. Default device value
+    8. Prompt embedding cache management
 
 No torch, diffusers, or GPU hardware required for any of these tests.
 """
@@ -24,53 +25,73 @@ from dimljus.training.protocols import InferencePipeline
 # Constructor behaviour
 # ---------------------------------------------------------------------------
 
-def test_constructor_stores_config():
-    """All constructor arguments must be persisted as instance attributes."""
+def test_constructor_individual_files():
+    """Constructor must store individual component paths."""
     pipe = WanInferencePipeline(
-        model_path="/fake/path",
+        vae_path="/fake/vae.safetensors",
+        t5_path="/fake/t5.pth",
         is_i2v=False,
         dtype="bf16",
     )
-    assert pipe._model_path == "/fake/path"
+    assert pipe._vae_path == "/fake/vae.safetensors"
+    assert pipe._t5_path == "/fake/t5.pth"
     assert pipe._is_i2v is False
     assert pipe._dtype_str == "bf16"
 
 
-def test_pipeline_not_loaded_at_init():
-    """Lazy-load contract: _pipeline must be None immediately after __init__.
+def test_constructor_diffusers_path():
+    """Constructor must store Diffusers directory path."""
+    pipe = WanInferencePipeline(
+        diffusers_path="/fake/diffusers-dir",
+        is_i2v=True,
+    )
+    assert pipe._diffusers_path == "/fake/diffusers-dir"
+    assert pipe._is_i2v is True
 
-    The pipeline is only loaded on the first generate() call. Initialising
+
+def test_constructor_both_paths():
+    """Both individual and diffusers paths can be set (individual takes priority)."""
+    pipe = WanInferencePipeline(
+        vae_path="/fake/vae.safetensors",
+        t5_path="/fake/t5.pth",
+        diffusers_path="/fake/diffusers-dir",
+    )
+    assert pipe._vae_path == "/fake/vae.safetensors"
+    assert pipe._t5_path == "/fake/t5.pth"
+    assert pipe._diffusers_path == "/fake/diffusers-dir"
+
+
+def test_no_pipeline_loaded_at_init():
+    """Lazy-load contract: nothing should be loaded at init time.
+
+    The pipeline is only built on the first generate() call. Initialising
     the class should never touch the GPU or the filesystem.
     """
-    pipe = WanInferencePipeline(model_path="/fake")
-    assert pipe._pipeline is None
+    pipe = WanInferencePipeline(vae_path="/fake/vae")
+    assert pipe._cached_prompt_embeds == {}
 
 
 def test_i2v_flag_true():
     """is_i2v=True must be stored and readable."""
-    pipe = WanInferencePipeline(model_path="/fake", is_i2v=True)
+    pipe = WanInferencePipeline(is_i2v=True)
     assert pipe._is_i2v is True
 
 
 def test_i2v_flag_false():
     """is_i2v=False (the default) must also be stored correctly."""
-    pipe = WanInferencePipeline(model_path="/fake", is_i2v=False)
+    pipe = WanInferencePipeline(is_i2v=False)
     assert pipe._is_i2v is False
 
 
 def test_default_device():
-    """Device should default to 'cuda' when not specified.
-
-    Wan models require CUDA for inference. The default keeps the common
-    case explicit without forcing users to repeat themselves.
-    """
-    pipe = WanInferencePipeline(model_path="/fake")
+    """Device should default to 'cuda' when not specified."""
+    pipe = WanInferencePipeline()
     assert pipe._device == "cuda"
 
 
 def test_constructor_stores_device():
     """An explicit device argument must be stored."""
-    pipe = WanInferencePipeline(model_path="/fake", device="cpu")
+    pipe = WanInferencePipeline(device="cpu")
     assert pipe._device == "cpu"
 
 
@@ -78,26 +99,18 @@ def test_constructor_stores_device():
 # cleanup() behaviour
 # ---------------------------------------------------------------------------
 
-def test_cleanup_when_no_pipeline():
-    """cleanup() must not raise when the pipeline was never loaded.
-
-    The training loop calls cleanup() unconditionally at the end of
-    sampling; it must be safe even if generate() was never invoked.
-    """
-    pipe = WanInferencePipeline(model_path="/fake")
+def test_cleanup_when_nothing_cached():
+    """cleanup() must not raise when no embeddings are cached."""
+    pipe = WanInferencePipeline()
     pipe.cleanup()  # Should not raise
 
 
-def test_cleanup_clears_pipeline():
-    """cleanup() must set _pipeline back to None after clearing it.
-
-    This ensures that a second generate() call after cleanup() will
-    attempt to reload the pipeline rather than use a stale reference.
-    """
-    pipe = WanInferencePipeline(model_path="/fake")
-    pipe._pipeline = "dummy"  # Simulate a loaded pipeline
+def test_cleanup_clears_prompt_cache():
+    """cleanup() must clear the prompt embedding cache."""
+    pipe = WanInferencePipeline()
+    pipe._cached_prompt_embeds = {"test": "dummy_tensor"}
     pipe.cleanup()
-    assert pipe._pipeline is None
+    assert pipe._cached_prompt_embeds == {}
 
 
 # ---------------------------------------------------------------------------
@@ -109,10 +122,8 @@ def test_protocol_compliance():
 
     InferencePipeline is @runtime_checkable, so isinstance() confirms
     that the class exposes the required generate() method signature.
-    The training loop uses this check to validate the pipeline object
-    before passing it to SamplingEngine.
     """
-    pipe = WanInferencePipeline(model_path="/fake")
+    pipe = WanInferencePipeline()
     assert isinstance(pipe, InferencePipeline)
 
 
@@ -120,21 +131,19 @@ def test_protocol_compliance():
 # Error propagation from generate()
 # ---------------------------------------------------------------------------
 
-def test_generate_without_pipeline_raises_on_bad_path(monkeypatch):
-    """generate() must raise SamplingError (or ImportError) for a bad path.
+def test_generate_without_deps_raises(monkeypatch):
+    """generate() must raise when torch/diffusers are not available.
 
-    When _pipeline is None, generate() calls _ensure_pipeline(), which
-    tries to import torch/diffusers and load from model_path. With a
-    nonexistent path this must raise rather than silently succeed.
-
-    SamplingError is raised when torch+diffusers are installed but the
-    path doesn't exist. ImportError is raised when the dependencies are
-    not installed at all (GPU-free CI environment). Both are acceptable
-    failure modes for this test.
+    In a GPU-free CI environment, this raises ImportError or SamplingError.
+    Either is acceptable — the key contract is that it doesn't silently
+    succeed.
     """
     from dimljus.training.errors import SamplingError
 
-    pipe = WanInferencePipeline(model_path="/nonexistent/path")
+    pipe = WanInferencePipeline(
+        vae_path="/nonexistent/vae.safetensors",
+        t5_path="/nonexistent/t5.pth",
+    )
     with pytest.raises((SamplingError, ImportError, OSError, Exception)):
         pipe.generate(
             model=None,

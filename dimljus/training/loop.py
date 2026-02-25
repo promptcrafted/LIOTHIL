@@ -863,16 +863,40 @@ class TrainingOrchestrator:
     ) -> None:
         """Save a checkpoint at the current epoch.
 
+        Extracts the current LoRA weights from the live PEFT model
+        (not from the LoRAState, which may be stale or empty). This
+        ensures checkpoints always contain the actual trained weights.
+
         Args:
             phase: Current training phase.
             epoch: Current epoch number.
-            lora: LoRA state to save.
+            lora: LoRA state (used for rank/alpha/metadata).
         """
         if lora is None:
             return
 
+        # Extract live LoRA weights from the PEFT-wrapped model.
+        # The LoRAState.state_dict may be empty (initial) or stale
+        # (from phase start); the real trained weights live in the
+        # model's PEFT layers.
+        try:
+            from dimljus.training.wan.modules import extract_lora_state_dict
+            live_state_dict = extract_lora_state_dict(self._model)
+        except Exception:
+            # Fall back to whatever the LoRAState has
+            live_state_dict = lora.state_dict
+
+        # Build a fresh LoRAState with the live weights for saving
+        checkpoint_lora = LoRAState(
+            state_dict=live_state_dict,
+            rank=lora.rank,
+            alpha=lora.alpha,
+            phase_type=lora.phase_type,
+            metadata=lora.metadata,
+        )
+
         path = self._checkpoint_mgr.checkpoint_path(phase.phase_type, epoch)
-        lora.save(
+        checkpoint_lora.save(
             path,
             extra_metadata={
                 "epoch": str(epoch),

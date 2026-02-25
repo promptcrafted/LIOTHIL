@@ -130,6 +130,10 @@ def _resolve_backend(config: object) -> object:
 def _resolve_inference_pipeline(config: object) -> object | None:
     """Create inference pipeline for sampling during training.
 
+    Supports both individual safetensors files (model.vae, model.t5)
+    and Diffusers directories (model.path). Individual file paths take
+    priority, with model.path as fallback.
+
     Args:
         config: DimljusTrainingConfig instance.
 
@@ -150,8 +154,27 @@ def _resolve_inference_pipeline(config: object) -> object | None:
             "bf16",
         )
 
+        # Resolve component paths — individual files take priority
+        vae_path = getattr(model, "vae", None)
+        t5_path = getattr(model, "t5", None)
+        diffusers_path = getattr(model, "path", None)
+
+        # Need at least one loading method available
+        has_individual = bool(vae_path and t5_path)
+        has_diffusers = bool(diffusers_path)
+        if not has_individual and not has_diffusers:
+            print(
+                "Warning: Cannot create inference pipeline — no model paths "
+                "available for sampling.\n"
+                "Set model.vae + model.t5 (individual files) or model.path "
+                "(Diffusers directory) in your config."
+            )
+            return None
+
         return WanInferencePipeline(
-            model_path=model.path,
+            vae_path=vae_path,
+            t5_path=t5_path,
+            diffusers_path=diffusers_path,
             is_i2v=is_i2v,
             dtype=dtype,
         )
