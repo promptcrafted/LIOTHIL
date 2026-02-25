@@ -10,7 +10,7 @@
 
 1. **Dimljus is built through Phase 8.** 1857 tests passing. The full pipeline — data preparation, captioning, triage, dataset organization, latent encoding infrastructure, model-agnostic training loop, and Wan 2.2 model implementations — is implemented and tested.
 
-2. **RunPod training works today.** `runpod/train.py` runs Wan 2.2 T2V and I2V LoRA training on RunPod using musubi-tuner as the backend. One script, both variants, both experts. Setup takes one command.
+2. **RunPod training works today.** `runpod/train.py` runs the full dimljus pipeline natively on RunPod — encoding and training with no external dependencies (no musubi-tuner). One script, one config file. Setup takes one command.
 
 3. **The data architecture is settled.** Targets vs signals, the Dimljus hierarchical structure, stem-based pairing, the manifest format — all decided, implemented, and tested against real datasets. These don't change.
 
@@ -31,7 +31,7 @@
 | 4 | Dataset Validation & Organization | 293 | COMPLETE |
 | — | Triage Module (CLIP-based content sorting) | 103 | COMPLETE |
 | 5 | Training Config Schema | 264 | COMPLETE |
-| 6 | Latent Pre-Encoding (GPU-free infra) | 221 | COMPLETE (GPU stubs remain) |
+| 6 | Latent Pre-Encoding (infra + GPU encoders) | 221 | COMPLETE |
 | 7 | Training Infrastructure + Differential MoE | 235 | COMPLETE |
 | 8 | Wan Model Implementations | 256 | COMPLETE |
 | — | RunPod Training Scripts | — | READY |
@@ -39,7 +39,7 @@
 
 ### What's NOT Done Yet
 
-- **Phase 6 GPU code** — Real VAE and T5 encoding (stubs exist in `vae_encoder.py`, `text_encoder.py`). The encoding infrastructure is complete, just needs the actual GPU encode calls filled in.
+- **GPU validation** — The full pipeline (encoding + training) has not been tested end-to-end on GPU yet. All 1857 tests are GPU-free mocks. First RunPod run will be the real validation.
 - **Phase 9** — Differential MoE training strategy as a first-class feature (the infrastructure supports it, but hasn't been validated end-to-end on GPU).
 - **Phase 10** — Control signal expansion (depth/edge/pose + control LoRA training).
 - **Phase 11+** — LTX, SkyReels, audio signals, VACE support.
@@ -58,9 +58,9 @@ dimljus/
   training/wan/    Wan-specific: constants, registry, PEFT bridge, checkpoint I/O, backend
 
 runpod/
-  setup.sh         One-command pod setup (system packages, musubi-tuner, models)
+  setup.sh         One-command pod setup (system packages, dimljus, models)
   train.py         Unified T2V + I2V training script
-  dataset-config.toml   Template dataset config for musubi-tuner
+  test-train.yaml  Minimal test config for pipeline validation
   README.md        Quick-start guide
 
 examples/
@@ -103,45 +103,27 @@ Via Jupyter Lab file browser:
     Images/           ← reference images for I2V (optional)
 ```
 
-Then edit `/workspace/dimljus/runpod/dataset-config.toml` to point to your dataset.
+Then create a training config YAML (copy from `examples/full_train.yaml` or `runpod/test-train.yaml`).
 
 ### Train
 
 ```bash
-cd /workspace/musubi-tuner
 tmux new -s train
 
-# T2V — train both experts sequentially
-python /workspace/dimljus/runpod/train.py --variant t2v --noise_level both
+# Full run: encode + train
+python /workspace/dimljus/runpod/train.py --config /workspace/my_train.yaml
 
-# I2V — train one expert
-python /workspace/dimljus/runpod/train.py --variant i2v --noise_level high
+# Dry run: validate config, print plan
+python /workspace/dimljus/runpod/train.py --config /workspace/my_train.yaml --dry-run
 
-# Custom hyperparameters
-python /workspace/dimljus/runpod/train.py --variant t2v --noise_level high \
-    --lr 5e-5 --rank 32 --epochs 30
+# Encode only (build caches, don't train)
+python /workspace/dimljus/runpod/train.py --config /workspace/my_train.yaml --encode-only
 
-# Resume from checkpoint
-python /workspace/dimljus/runpod/train.py --variant t2v --noise_level high \
-    --resume_from /workspace/outputs/my-lora-e25.safetensors
-
-# Train on top of a speed LoRA (Lightning)
-python /workspace/dimljus/runpod/train.py --variant t2v --noise_level high \
-    --merge lightning
+# Skip encoding (caches already built)
+python /workspace/dimljus/runpod/train.py --config /workspace/my_train.yaml --skip-encoding
 ```
 
-### Default Hyperparameters
-
-| Setting | High-Noise Expert | Low-Noise Expert |
-|---------|-------------------|------------------|
-| Learning Rate | 1e-4 | 8e-5 |
-| LoRA Rank | 16 | 16 |
-| LoRA Alpha | 16 | 16 |
-| Max Epochs | 30 | 50 |
-| Save Every | 5 epochs | 5 epochs |
-
-Shared: adamw8bit, cosine_with_min_lr scheduler, 0.01 weight decay, seed 42.
-T2V: flow shift 3.0, boundary 875. I2V: flow shift 5.0, boundary 900.
+All hyperparameters live in the YAML config file — see `examples/full_train.yaml` for the full reference.
 
 ### After Pod Restart
 
@@ -155,13 +137,13 @@ Models stay cached on `/workspace`. Only Python packages need reinstalling.
 
 ## How the RunPod Script Works
 
-The training script (`runpod/train.py`) is a bridge. It uses **musubi-tuner** as the GPU backend while dimljus's native training pipeline matures. The 3-step pipeline:
+The training script (`runpod/train.py`) runs the dimljus pipeline natively. It sequences three steps:
 
-1. **Cache latents** — VAE encodes all videos/images to latent space (musubi's `wan_cache_latents.py`)
-2. **Cache text** — T5 encodes all captions (musubi's `wan_cache_text_encoder_outputs.py`)
-3. **Train LoRA** — Gradient descent on cached latents (musubi's `wan_train_network.py` via accelerate)
+1. **Cache latents** — VAE encodes all videos/images to latent space (`dimljus.encoding cache-latents`)
+2. **Cache text** — T5 encodes all captions (`dimljus.encoding cache-text`)
+3. **Train LoRA** — Gradient descent on cached latents (`dimljus.training train`)
 
-When dimljus's native GPU code is ready (Phase 6 Steps 10-11 + Phase 8 GPU validation), we swap the musubi subprocess calls for `python -m dimljus.training train --config train.yaml`.
+Models are loaded from individual `.safetensors` files (how Comfy-Org distributes them). No Diffusers directory layout needed. The config YAML specifies paths to each component: `dit_high`, `dit_low`, `vae`, `t5`.
 
 ---
 
