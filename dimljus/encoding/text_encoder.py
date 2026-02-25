@@ -49,6 +49,7 @@ class T5TextEncoder:
         dtype: str = "bf16",
         device: str = "cuda",
         max_length: int = 512,
+        t5_path: str | None = None,
     ) -> None:
         """Initialize the text encoder (model loaded lazily).
 
@@ -58,11 +59,16 @@ class T5TextEncoder:
             dtype: Tensor dtype ('bf16', 'fp16', 'fp32').
             device: Target device ('cuda', 'cpu').
             max_length: Maximum token sequence length.
+            t5_path: Optional path to a single T5 weights file (.pth or
+                .safetensors). When set, the tokenizer is loaded from
+                HuggingFace 'google/umt5-xxl' (always small), and the
+                model weights from this file.
         """
         self._model_id = model_id
         self._dtype_str = dtype
         self._device = device
         self._max_length = max_length
+        self._t5_path = t5_path
         self._model = None
         self._tokenizer = None
 
@@ -107,16 +113,52 @@ class T5TextEncoder:
         dtype = dtype_map.get(self._dtype_str, torch.bfloat16)
 
         try:
-            model_path = Path(self._model_id)
+            # Priority 1: Direct path to a single weights file
+            if self._t5_path is not None:
+                t5_file = Path(self._t5_path)
+                if not t5_file.is_file():
+                    raise EncoderError(
+                        "t5_text",
+                        f"T5 weights file not found: '{self._t5_path}'"
+                    )
 
-            # Check if this is a Wan model directory with text_encoder subfolder
-            if model_path.is_dir() and (model_path / "text_encoder").is_dir():
+                # Tokenizer always from HuggingFace — it's tiny
+                self._tokenizer = AutoTokenizer.from_pretrained(
+                    "google/umt5-xxl",
+                )
+
+                # Load weights from the single file
+                if t5_file.suffix == ".pth":
+                    state_dict = torch.load(
+                        str(t5_file),
+                        map_location="cpu",
+                        weights_only=True,
+                    )
+                elif t5_file.suffix == ".safetensors":
+                    from safetensors.torch import load_file
+                    state_dict = load_file(str(t5_file))
+                else:
+                    raise EncoderError(
+                        "t5_text",
+                        f"Unsupported T5 file format: '{t5_file.suffix}'. "
+                        f"Expected .pth or .safetensors."
+                    )
+
+                self._model = UMT5EncoderModel.from_pretrained(
+                    "google/umt5-xxl",
+                    torch_dtype=dtype,
+                    state_dict=state_dict,
+                )
+
+            # Priority 2: Wan model directory with text_encoder subfolder
+            elif (model_path := Path(self._model_id)).is_dir() and (
+                model_path / "text_encoder"
+            ).is_dir():
                 self._model = UMT5EncoderModel.from_pretrained(
                     str(model_path),
                     subfolder="text_encoder",
                     torch_dtype=dtype,
                 )
-                # Tokenizer may be in a 'tokenizer' subfolder
                 tokenizer_path = model_path / "tokenizer"
                 if tokenizer_path.is_dir():
                     self._tokenizer = AutoTokenizer.from_pretrained(
@@ -127,8 +169,9 @@ class T5TextEncoder:
                         str(model_path),
                         subfolder="tokenizer",
                     )
+
+            # Priority 3: Standalone HuggingFace model ID
             else:
-                # Standalone model ID (e.g. "google/umt5-xxl")
                 self._model = UMT5EncoderModel.from_pretrained(
                     self._model_id,
                     torch_dtype=dtype,
@@ -143,9 +186,10 @@ class T5TextEncoder:
         except EncoderError:
             raise
         except Exception as e:
+            source = self._t5_path if self._t5_path else self._model_id
             raise EncoderError(
                 "t5_text",
-                f"Failed to load T5 encoder from '{self._model_id}': {e}\n"
+                f"Failed to load T5 encoder from '{source}': {e}\n"
                 f"Check that the path or model ID is correct."
             ) from e
 

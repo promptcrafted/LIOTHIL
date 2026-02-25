@@ -55,18 +55,24 @@ class WanVaeEncoder:
         model_path: str,
         dtype: str = "bf16",
         device: str = "cuda",
+        vae_path: str | None = None,
     ) -> None:
         """Initialize the VAE encoder (model loaded lazily on first encode).
 
         Args:
             model_path: Path to Wan model directory or HuggingFace model ID.
-                The VAE is loaded from the 'vae' subdirectory.
+                The VAE is loaded from the 'vae' subdirectory. Used as
+                fallback when vae_path is not set.
             dtype: Tensor dtype ('bf16', 'fp16', 'fp32').
             device: Target device ('cuda', 'cpu').
+            vae_path: Optional path to a single VAE .safetensors file.
+                When set, loads via from_single_file() instead of from
+                a Diffusers directory.
         """
         self._model_path = model_path
         self._dtype_str = dtype
         self._device = device
+        self._vae_path = vae_path
         self._vae = None  # Lazy loaded
 
     @property
@@ -106,28 +112,43 @@ class WanVaeEncoder:
         dtype = dtype_map.get(self._dtype_str, torch.bfloat16)
 
         try:
-            model_path = Path(self._model_path)
-            if model_path.is_dir():
-                self._vae = AutoencoderKLWan.from_pretrained(
-                    str(model_path),
-                    subfolder="vae",
+            # Priority 1: Direct path to a single .safetensors file
+            if self._vae_path is not None:
+                vae_file = Path(self._vae_path)
+                if not vae_file.is_file():
+                    raise EncoderError(
+                        "wan_vae",
+                        f"VAE file not found: '{self._vae_path}'"
+                    )
+                self._vae = AutoencoderKLWan.from_single_file(
+                    str(vae_file),
                     torch_dtype=dtype,
                 )
+            # Priority 2: Diffusers directory or HuggingFace ID
             else:
-                self._vae = AutoencoderKLWan.from_pretrained(
-                    self._model_path,
-                    subfolder="vae",
-                    torch_dtype=dtype,
-                )
+                model_path = Path(self._model_path)
+                if model_path.is_dir():
+                    self._vae = AutoencoderKLWan.from_pretrained(
+                        str(model_path),
+                        subfolder="vae",
+                        torch_dtype=dtype,
+                    )
+                else:
+                    self._vae = AutoencoderKLWan.from_pretrained(
+                        self._model_path,
+                        subfolder="vae",
+                        torch_dtype=dtype,
+                    )
             self._vae.to(self._device)
             self._vae.eval()
         except EncoderError:
             raise
         except Exception as e:
+            source = self._vae_path if self._vae_path else self._model_path
             raise EncoderError(
                 "wan_vae",
-                f"Failed to load Wan VAE from '{self._model_path}': {e}\n"
-                f"Check that the path is correct and contains a 'vae' subfolder."
+                f"Failed to load Wan VAE from '{source}': {e}\n"
+                f"Check that the path is correct."
             ) from e
 
     def encode(self, input_path: str, **kwargs: Any) -> dict[str, Any]:

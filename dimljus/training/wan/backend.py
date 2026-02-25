@@ -34,7 +34,8 @@ class WanModelBackend:
 
     Args:
         model_id: Human-readable identifier (e.g. 'wan-2.2-t2v-14b').
-        model_path: Path to model directory or HuggingFace ID.
+        model_path: Path to model directory or HuggingFace ID. Used as
+            fallback when individual file paths are not provided.
         is_moe: Whether this is an MoE model (Wan 2.2 = True, 2.1 = False).
         is_i2v: Whether this is an I2V model.
         in_channels: Input channel count (16 for T2V, 36 for I2V).
@@ -43,12 +44,15 @@ class WanModelBackend:
         flow_shift: Flow matching shift parameter.
         lora_targets: List of module suffixes for LoRA placement.
         expert_subfolders: Maps expert names to diffusers subfolder paths.
+        dit_path: Path to a single safetensors file for non-MoE models.
+        dit_high_path: Path to high-noise expert safetensors (MoE only).
+        dit_low_path: Path to low-noise expert safetensors (MoE only).
     """
 
     def __init__(
         self,
         model_id: str,
-        model_path: str,
+        model_path: str | None = None,
         is_moe: bool = True,
         is_i2v: bool = False,
         in_channels: int = 16,
@@ -57,6 +61,9 @@ class WanModelBackend:
         flow_shift: float = 3.0,
         lora_targets: list[str] | None = None,
         expert_subfolders: dict[str, str] | None = None,
+        dit_path: str | None = None,
+        dit_high_path: str | None = None,
+        dit_low_path: str | None = None,
     ) -> None:
         self._model_id = model_id
         self._model_path = model_path
@@ -69,6 +76,11 @@ class WanModelBackend:
         self._lora_targets = lora_targets or []
         self._expert_subfolders = expert_subfolders or {}
         self._noise_schedule = FlowMatchingSchedule(1000)
+
+        # Individual safetensors file paths (alternative to Diffusers directory)
+        self._dit_path = dit_path
+        self._dit_high_path = dit_high_path
+        self._dit_low_path = dit_low_path
 
         # Track which expert is currently loaded (for MoE switching)
         self._current_expert: str | None = None
@@ -99,8 +111,13 @@ class WanModelBackend:
     ) -> Any:
         """Load the Wan transformer model from disk.
 
-        For MoE models, the expert parameter selects which expert to load
-        (each is a separate WanTransformer3DModel in its own subfolder).
+        Two loading modes:
+        1. **Single-file** — When dit_path (non-MoE) or dit_high_path/
+           dit_low_path (MoE) are set, uses from_single_file().
+        2. **Diffusers directory** (fallback) — Uses from_pretrained()
+           with model_path and a subfolder.
+
+        For MoE models, the expert parameter selects which expert to load.
         For single-expert models, expert is ignored.
 
         Args:
@@ -123,14 +140,6 @@ class WanModelBackend:
                 f"Install with: pip install 'dimljus[wan]'"
             )
 
-        # Determine subfolder
-        if expert is not None and expert in self._expert_subfolders:
-            subfolder = self._expert_subfolders[expert]
-        elif "default" in self._expert_subfolders:
-            subfolder = self._expert_subfolders["default"]
-        else:
-            subfolder = WAN_SINGLE_SUBFOLDER
-
         # Determine dtype from config
         dtype_str = getattr(config, "base_model_precision", "bf16")
         dtype_map = {
@@ -140,31 +149,74 @@ class WanModelBackend:
         }
         dtype = dtype_map.get(dtype_str, torch.bfloat16)
 
-        try:
-            model_path = Path(self._model_path)
-            if model_path.is_dir():
-                # Local path
-                model = WanTransformer3DModel.from_pretrained(
-                    str(model_path),
-                    subfolder=subfolder,
+        # Check for individual safetensors file path
+        single_file = self._resolve_single_file_path(expert)
+
+        if single_file is not None:
+            # -- Single-file loading --
+            try:
+                model = WanTransformer3DModel.from_single_file(
+                    single_file,
                     torch_dtype=dtype,
                 )
+            except Exception as e:
+                raise ModelBackendError(
+                    f"Failed to load Wan model from '{single_file}': {e}\n"
+                    f"Check that the file exists and is a valid safetensors "
+                    f"checkpoint."
+                ) from e
+        else:
+            # -- Diffusers directory loading (fallback) --
+            if expert is not None and expert in self._expert_subfolders:
+                subfolder = self._expert_subfolders[expert]
+            elif "default" in self._expert_subfolders:
+                subfolder = self._expert_subfolders["default"]
             else:
-                # HuggingFace ID
-                model = WanTransformer3DModel.from_pretrained(
-                    self._model_path,
-                    subfolder=subfolder,
-                    torch_dtype=dtype,
+                subfolder = WAN_SINGLE_SUBFOLDER
+
+            if not self._model_path:
+                raise ModelBackendError(
+                    "No model path configured. Set individual file paths "
+                    "(dit_high, dit_low) or a Diffusers directory (path) "
+                    "in the model config."
                 )
-        except Exception as e:
-            raise ModelBackendError(
-                f"Failed to load Wan model from '{self._model_path}' "
-                f"(subfolder='{subfolder}'): {e}\n"
-                f"Check that the path is correct and the model files exist."
-            ) from e
+
+            try:
+                model_path = Path(self._model_path)
+                if model_path.is_dir():
+                    model = WanTransformer3DModel.from_pretrained(
+                        str(model_path),
+                        subfolder=subfolder,
+                        torch_dtype=dtype,
+                    )
+                else:
+                    model = WanTransformer3DModel.from_pretrained(
+                        self._model_path,
+                        subfolder=subfolder,
+                        torch_dtype=dtype,
+                    )
+            except Exception as e:
+                raise ModelBackendError(
+                    f"Failed to load Wan model from '{self._model_path}' "
+                    f"(subfolder='{subfolder}'): {e}\n"
+                    f"Check that the path is correct and the model files "
+                    f"exist."
+                ) from e
 
         self._current_expert = expert
         return model
+
+    def _resolve_single_file_path(self, expert: str | None) -> str | None:
+        """Determine which single-file path to use, if any.
+
+        For MoE: maps expert name to dit_high_path / dit_low_path.
+        For non-MoE: returns dit_path.
+        Returns None to signal fallback to from_pretrained().
+        """
+        if self._is_moe and expert is not None:
+            return {"high_noise": self._dit_high_path,
+                    "low_noise": self._dit_low_path}.get(expert)
+        return self._dit_path
 
     def get_lora_target_modules(self) -> list[str]:
         """Return the list of module names for LoRA adapter placement.

@@ -12,9 +12,23 @@
 # ── Model & Data ─────────────────────────────────────────────────────
 
 model:
-  path: C:/Users/minta/Projects/dimljus/models/Wan2.2-I2V-14B-Diffusers
-  family: wan
   variant: 2.2_t2v                         # 2.2_t2v | 2.2_i2v
+
+  # --- Individual weight files (recommended) ---
+  # Point to each component's safetensors file directly.
+  # This is how Comfy-Org distributes models and how setup.sh downloads them.
+  dit_high: /workspace/models/wan2.2_t2v_high_noise_14B_fp16.safetensors
+  dit_low: /workspace/models/wan2.2_t2v_low_noise_14B_fp16.safetensors
+  vae: /workspace/models/wan_2.1_vae.safetensors
+  t5: /workspace/models/models_t5_umt5-xxl-enc-bf16.pth
+  # For non-MoE models (Wan 2.1), use dit instead of dit_high/dit_low:
+  # dit: /path/to/transformer.safetensors
+
+  # --- Diffusers directory (alternative) ---
+  # Uncomment to load all components from a single Diffusers directory.
+  # When set, individual file paths above take priority.
+  # path: Wan-AI/Wan2.2-T2V-14B-Diffusers
+
   # Architecture auto-fills from variant. Override only if needed:
   # is_moe: true
   # in_channels: 36                        # T2V: 16, I2V: 36 (+ reference image)

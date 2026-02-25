@@ -169,11 +169,12 @@ def cmd_cache_latents(args: argparse.Namespace) -> None:
     # Create cache dirs
     ensure_cache_dirs(cache_dir)
 
-    # Build manifest (without actual encoding — GPU encoding is Phase 6 Step 10)
+    # Build manifest
+    vae_id = config.model.vae or config.model.path or "unknown"
     manifest = build_cache_manifest(
         expanded,
         cache_dir=cache_dir,
-        vae_id=config.model.path,
+        vae_id=vae_id,
         dtype=config.cache.dtype,
     )
 
@@ -187,9 +188,54 @@ def cmd_cache_latents(args: argparse.Namespace) -> None:
         print("Dry run — no encoding performed.")
         return
 
-    # TODO: Phase 6 Step 10 — real VAE encoding goes here
-    print("VAE encoding not yet implemented (Phase 6 Steps 10-11).")
-    print("Manifest and cache structure are ready for when encoders are added.")
+    # --- Real VAE encoding ---
+    from dimljus.encoding.vae_encoder import WanVaeEncoder
+
+    encoder = WanVaeEncoder(
+        model_path=config.model.path or "",
+        vae_path=getattr(config.model, "vae", None),
+        dtype=config.cache.dtype,
+    )
+
+    encoded_count = 0
+    skip_count = 0
+    error_count = 0
+
+    for i, (sample, entry) in enumerate(zip(expanded, manifest.entries)):
+        latent_path = cache_dir / entry.latent_file
+        if latent_path.is_file() and not args.force:
+            skip_count += 1
+            continue
+
+        print(f"  [{i+1}/{len(expanded)}] Encoding: {sample.source_stem} "
+              f"({sample.bucket_frames}f {sample.bucket_width}x{sample.bucket_height})")
+
+        try:
+            result = encoder.encode(
+                str(sample.target),
+                target_width=sample.bucket_width,
+                target_height=sample.bucket_height,
+                target_frames=sample.bucket_frames,
+                frame_extraction=sample.frame_extraction.value,
+            )
+
+            from safetensors.torch import save_file
+            latent_path.parent.mkdir(parents=True, exist_ok=True)
+            save_file({"latent": result["latent"]}, str(latent_path))
+            encoded_count += 1
+
+        except Exception as e:
+            print(f"    ERROR: {e}")
+            error_count += 1
+
+    encoder.cleanup()
+    save_cache_manifest(manifest, cache_dir)
+
+    print(f"\nVAE encoding complete:")
+    print(f"  Encoded: {encoded_count}")
+    print(f"  Skipped (cached): {skip_count}")
+    if error_count:
+        print(f"  Errors: {error_count}")
 
 
 # ---------------------------------------------------------------------------
@@ -232,8 +278,62 @@ def cmd_cache_text(args: argparse.Namespace) -> None:
         print("Dry run — no encoding performed.")
         return
 
-    # TODO: Phase 6 Step 11 — real T5 encoding goes here
-    print("T5 encoding not yet implemented (Phase 6 Steps 10-11).")
+    # --- Real T5 encoding ---
+    from dimljus.encoding.text_encoder import T5TextEncoder
+
+    encoder = T5TextEncoder(
+        model_id=config.model.path or "google/umt5-xxl",
+        t5_path=getattr(config.model, "t5", None),
+        dtype=config.cache.dtype,
+    )
+
+    encoded_count = 0
+    skip_count = 0
+    error_count = 0
+
+    # Find unique text entries (one per stem)
+    text_entries: dict[str, str] = {}
+    for entry in manifest.entries:
+        if entry.text_file and entry.text_file not in text_entries:
+            source = Path(entry.source_path)
+            caption_path = source.with_suffix(".txt")
+            if caption_path.is_file():
+                text_entries[entry.text_file] = str(caption_path)
+
+    print(f"Unique captions to encode: {len(text_entries)}")
+
+    for i, (text_file, caption_path) in enumerate(text_entries.items()):
+        text_out_path = cache_dir / text_file
+        if text_out_path.is_file() and not getattr(args, "force", False):
+            skip_count += 1
+            continue
+
+        stem = Path(text_file).stem
+        print(f"  [{i+1}/{len(text_entries)}] Encoding: {stem}")
+
+        try:
+            result = encoder.encode(caption_path)
+
+            from safetensors.torch import save_file
+            text_out_path.parent.mkdir(parents=True, exist_ok=True)
+            save_file(
+                {"text_emb": result["text_emb"], "text_mask": result["text_mask"]},
+                str(text_out_path),
+            )
+            encoded_count += 1
+
+        except Exception as e:
+            print(f"    ERROR: {e}")
+            error_count += 1
+
+    encoder.cleanup()
+    save_cache_manifest(manifest, cache_dir)
+
+    print(f"\nT5 encoding complete:")
+    print(f"  Encoded: {encoded_count}")
+    print(f"  Skipped (cached): {skip_count}")
+    if error_count:
+        print(f"  Errors: {error_count}")
 
 
 # ---------------------------------------------------------------------------

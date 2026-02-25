@@ -654,14 +654,66 @@ class ModelConfig(BaseModel):
     to fill in architecture defaults (channel counts, MoE settings, etc.).
     User fields override auto-filled values.
 
-    The path can be a local directory or a HuggingFace model ID (org/model).
-    Local paths are resolved relative to the config file's location.
+    Two ways to point at model weights:
+
+    1. **Individual files** (recommended): Set dit_high/dit_low (MoE) or dit
+       (non-MoE), plus vae and t5. Each points to a single .safetensors or
+       .pth file. This is how models are distributed by Comfy-Org and how
+       setup.sh downloads them on RunPod.
+
+    2. **Diffusers directory**: Set path to a local directory or HuggingFace
+       ID (e.g. 'Wan-AI/Wan2.2-T2V-14B-Diffusers'). Components are loaded
+       from standard subdirectories (transformer/, vae/, text_encoder/).
+
+    When both are set, individual files take priority over the directory.
     """
 
-    path: str = Field(
+    # --- Individual weight files (primary) ---
+    dit: str | None = Field(
+        default=None,
         description=(
-            "Path to model weights. Can be a local directory or a HuggingFace ID "
-            "(e.g. 'Wan-AI/Wan2.2-T2V-14B-Diffusers'). Local paths are resolved "
+            "Path to transformer weights (.safetensors). For non-MoE models "
+            "(Wan 2.1). Ignored when dit_high/dit_low are set."
+        ),
+    )
+    dit_high: str | None = Field(
+        default=None,
+        description=(
+            "Path to high-noise expert weights (.safetensors). For MoE models "
+            "(Wan 2.2). Used together with dit_low."
+        ),
+    )
+    dit_low: str | None = Field(
+        default=None,
+        description=(
+            "Path to low-noise expert weights (.safetensors). For MoE models "
+            "(Wan 2.2). Used together with dit_high."
+        ),
+    )
+    vae: str | None = Field(
+        default=None,
+        description=(
+            "Path to VAE weights (.safetensors). When set, the VAE is loaded "
+            "from this file via from_single_file() instead of from a "
+            "Diffusers directory."
+        ),
+    )
+    t5: str | None = Field(
+        default=None,
+        description=(
+            "Path to T5 text encoder weights (.pth or .safetensors). When set, "
+            "weights are loaded from this file and the tokenizer is downloaded "
+            "from HuggingFace (google/umt5-xxl, which is tiny)."
+        ),
+    )
+
+    # --- Diffusers directory (fallback) ---
+    path: str | None = Field(
+        default=None,
+        description=(
+            "Path to a Diffusers model directory or HuggingFace ID "
+            "(e.g. 'Wan-AI/Wan2.2-T2V-14B-Diffusers'). Used as fallback when "
+            "individual file paths are not set. Local paths are resolved "
             "relative to the config file's location."
         ),
     )

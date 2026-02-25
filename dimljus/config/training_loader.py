@@ -230,12 +230,20 @@ def _resolve_paths(data: dict, base_dir: Path) -> dict:
     if "data_config" in data and isinstance(data["data_config"], str):
         data["data_config"] = str(_resolve_one(data["data_config"], base_dir))
 
-    # Resolve model.path (skip HuggingFace IDs)
+    # Resolve model paths
     model_block = data.get("model", {})
-    if isinstance(model_block, dict) and "path" in model_block:
-        path_str = model_block["path"]
-        if isinstance(path_str, str) and not _is_huggingface_id(path_str):
-            model_block["path"] = str(_resolve_one(path_str, base_dir))
+    if isinstance(model_block, dict):
+        # Diffusers directory override (skip HuggingFace IDs)
+        if "path" in model_block:
+            path_str = model_block["path"]
+            if isinstance(path_str, str) and not _is_huggingface_id(path_str):
+                model_block["path"] = str(_resolve_one(path_str, base_dir))
+        # Individual weight file paths
+        for file_key in ("dit", "dit_high", "dit_low", "vae", "t5"):
+            if model_block.get(file_key) and isinstance(model_block[file_key], str):
+                model_block[file_key] = str(
+                    _resolve_one(model_block[file_key], base_dir)
+                )
 
     # Resolve save.output_dir
     save_block = data.get("save", {})

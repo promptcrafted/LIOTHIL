@@ -149,9 +149,14 @@ def get_wan_backend(config: Any) -> Any:
     if hasattr(config, "lora") and config.lora.target_modules is not None:
         lora_targets = config.lora.target_modules
 
+    # Resolve individual file paths from config
+    dit_path = getattr(config.model, "dit", None)
+    dit_high_path = getattr(config.model, "dit_high", None)
+    dit_low_path = getattr(config.model, "dit_low", None)
+
     return WanModelBackend(
         model_id=info["model_id"],
-        model_path=config.model.path,
+        model_path=config.model.path or "",
         is_moe=info["is_moe"],
         is_i2v=info["is_i2v"],
         in_channels=info["in_channels"],
@@ -160,4 +165,7 @@ def get_wan_backend(config: Any) -> Any:
         flow_shift=flow_shift,
         lora_targets=lora_targets,
         expert_subfolders=info["expert_subfolders"],
+        dit_path=dit_path,
+        dit_high_path=dit_high_path,
+        dit_low_path=dit_low_path,
     )

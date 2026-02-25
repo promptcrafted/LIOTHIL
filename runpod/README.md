@@ -1,6 +1,6 @@
 # Dimljus — RunPod Training
 
-Quick-start guide for training Wan 2.2 LoRAs on RunPod.
+Quick-start guide for training Wan 2.2 LoRAs on RunPod using dimljus natively.
 
 ## Setup
 
@@ -31,83 +31,91 @@ Via Jupyter Lab file browser, upload to:
 
 ```
 /workspace/datasets/my_dataset/
-    Videos/           ← your training clips (.mp4)
-    Videos/*.txt      ← caption files (same name as video)
-    Images/           ← reference images for I2V (optional)
+    clip_001.mp4          ← training video clips
+    clip_001.txt          ← caption sidecar (same stem as video)
+    clip_002.mp4
+    clip_002.txt
+    ...
 ```
 
-### 4. Edit Dataset Config
+You also need a `dimljus_data.yaml` in the dataset directory. See the
+[data config docs](../docs/) for the schema, or use a minimal one:
 
-Edit `/workspace/dimljus/runpod/dataset-config.toml`:
-- Change the `video_directory` path to your dataset
-- For I2V: uncomment the image subset section
+```yaml
+# /workspace/datasets/my_dataset/dimljus_data.yaml
+video:
+  target_fps: 16
+  min_duration: 1.0
+```
+
+### 4. Create a Training Config
+
+```bash
+cp /workspace/dimljus/examples/full_train.yaml /workspace/my_train.yaml
+```
+
+Edit `/workspace/my_train.yaml`:
+- Set `data_config` to point to your dataset's `dimljus_data.yaml`
+- Adjust epochs, learning rates, and output paths as needed
+- Model file paths are already set for RunPod (`/workspace/models/...`)
+
+See `runpod/test-train.yaml` for a minimal example.
 
 ## Training
 
-Always run training inside tmux (so it survives if your browser disconnects):
+Always run training inside tmux (survives browser disconnects):
 
 ```bash
-cd /workspace/musubi-tuner
 tmux new -s train
 ```
 
-### T2V (Text-to-Video)
+### Full Run (Encode + Train)
 
 ```bash
-# Train high-noise expert
-python /workspace/dimljus/runpod/train.py --variant t2v --noise_level high
-
-# Train low-noise expert
-python /workspace/dimljus/runpod/train.py --variant t2v --noise_level low
-
-# Train both sequentially
-python /workspace/dimljus/runpod/train.py --variant t2v --noise_level both
+python /workspace/dimljus/runpod/train.py --config /workspace/my_train.yaml
 ```
 
-### I2V (Image-to-Video)
+This runs all three steps automatically:
+1. **Cache latents** — encode videos through VAE
+2. **Cache text** — encode captions through T5
+3. **Train** — run the dimljus training loop
+
+### Dry Run (Validate Config)
 
 ```bash
-python /workspace/dimljus/runpod/train.py --variant i2v --noise_level high
-python /workspace/dimljus/runpod/train.py --variant i2v --noise_level low
+python /workspace/dimljus/runpod/train.py --config /workspace/my_train.yaml --dry-run
 ```
 
-### Custom Hyperparameters
+Validates your config and prints the training plan without using the GPU.
+
+### Encode Only
 
 ```bash
-python /workspace/dimljus/runpod/train.py --variant t2v --noise_level high \
-    --lr 5e-5 --rank 32 --alpha 32 --epochs 30
+python /workspace/dimljus/runpod/train.py --config /workspace/my_train.yaml --encode-only
 ```
 
-### Resume from Checkpoint
+Build latent and text caches without starting training. Useful for
+verifying encoding works before committing to a long training run.
+
+### Skip Encoding
 
 ```bash
-# Explicit path
-python /workspace/dimljus/runpod/train.py --variant t2v --noise_level high \
-    --resume_from /workspace/outputs/my-lora-e25.safetensors
-
-# Auto-detect: drop a .safetensors in /workspace/resume_checkpoints/
-python /workspace/dimljus/runpod/train.py --variant t2v --noise_level high
+python /workspace/dimljus/runpod/train.py --config /workspace/my_train.yaml --skip-encoding
 ```
 
-### Train with Speed LoRA (Lightning)
-
-Bake a speed LoRA into the DiT before training. The resulting character LoRA
-works together with the speed LoRA at inference for faster generation.
-
-```bash
-python /workspace/dimljus/runpod/train.py --variant t2v --noise_level high \
-    --merge lightning --merge_strength 0.8
-```
+Skip encoding steps (use existing caches). Useful when re-running
+training with different hyperparameters on the same dataset.
 
 ## Download Results
 
-Results are saved to `/workspace/outputs/`. Download via:
+Results are saved to `/workspace/outputs/` (or wherever `save.output_dir` points).
+Download via:
 - Jupyter Lab file browser
 - `scp -P PORT root@HOST:/workspace/outputs/*.safetensors .`
 
 ## After Pod Restart
 
-Run setup again to reinstall Python packages (models stay cached):
+Run setup again to reinstall Python packages (models stay cached on `/workspace`):
 
 ```bash
 bash /workspace/dimljus/runpod/setup.sh
@@ -115,14 +123,16 @@ bash /workspace/dimljus/runpod/setup.sh
 
 ## Default Hyperparameters
 
-| Setting | High-Noise | Low-Noise |
-|---------|-----------|-----------|
-| Learning Rate | 1e-4 | 8e-5 |
-| LoRA Rank | 16 | 16 |
-| LoRA Alpha | 16 | 16 |
-| Max Epochs | 30 | 50 |
-| Save Every | 5 | 5 |
+All training configuration lives in the YAML config file. See
+`examples/full_train.yaml` for the full reference with all options documented.
+
+Key defaults for fork-and-specialize MoE training:
+
+| Setting | Unified | High-Noise Expert | Low-Noise Expert |
+|---------|---------|-------------------|------------------|
+| Learning Rate | 5e-5 | 1e-4 | 8e-5 |
+| Epochs | 15 | 30 | 50 |
+| LoRA Rank | 16 | 16 | 16 |
+| LoRA Alpha | 16 | 16 | 16 |
 
 Shared: adamw8bit optimizer, cosine_with_min_lr scheduler, 0.01 weight decay, seed 42.
-
-T2V: flow shift 3.0, boundary 875. I2V: flow shift 5.0, boundary 900.

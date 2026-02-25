@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# RunPod Setup Script for Dimljus / Wan LoRA Training
+# RunPod Setup Script for Dimljus Training
 # =============================================================================
 # Run this ONCE when you first create your pod, AND again after every restart
 # (pod restarts wipe the container disk where Python packages live).
@@ -23,52 +23,34 @@ echo "=============================================="
 
 # --- 1. System packages ---
 echo ""
-echo "[1/7] Installing system packages..."
+echo "[1/5] Installing system packages..."
 apt-get update -qq
 apt-get install -y -qq ffmpeg python3-opencv tmux > /dev/null 2>&1
 echo "  Done: ffmpeg, opencv, tmux"
 
-# --- 2. Clone musubi-tuner (training backend) ---
+# --- 2. Clone and install dimljus ---
 echo ""
-echo "[2/7] Setting up musubi-tuner..."
-if [ -d "/workspace/musubi-tuner" ]; then
-    echo "  musubi-tuner already exists — pulling latest..."
-    cd /workspace/musubi-tuner
+echo "[2/5] Setting up dimljus..."
+if [ -d "/workspace/dimljus" ]; then
+    echo "  dimljus already exists — pulling latest..."
+    cd /workspace/dimljus
     git pull
 else
-    echo "  Cloning musubi-tuner..."
+    echo "  Cloning dimljus..."
     cd /workspace
-    git clone https://github.com/kohya-ss/musubi-tuner.git
-    cd /workspace/musubi-tuner
-fi
-echo "  Done: musubi-tuner ready"
-
-# --- 3. Install Python dependencies ---
-echo ""
-echo "[3/7] Installing Python dependencies..."
-# RunPod PyTorch templates already have torch installed.
-# NOTE: These live on the container disk, so they need reinstalling after restart.
-cd /workspace/musubi-tuner
-pip install -q -r requirements.txt 2>/dev/null || pip install -q -e . 2>/dev/null
-pip install -q "transformers>=4.46.0" huggingface_hub hf_transfer pydantic==1.10.13 albumentations==1.4.3
-echo "  Done: musubi-tuner dependencies"
-
-# --- 4. Install dimljus ---
-echo ""
-echo "[4/7] Installing dimljus..."
-if [ -d "/workspace/dimljus" ]; then
+    git clone https://github.com/alvdansen/dimljus.git
     cd /workspace/dimljus
-    pip install -q -e ".[wan]" 2>/dev/null || pip install -q -e . 2>/dev/null
-    echo "  Done: dimljus installed (editable mode)"
-else
-    echo "  WARNING: /workspace/dimljus not found."
-    echo "  Clone the repo: git clone https://github.com/alvdansen/dimljus.git /workspace/dimljus"
-    echo "  Then re-run this script."
 fi
 
-# --- 5. Set up HuggingFace ---
+# Install dimljus with Wan training dependencies.
+# NOTE: These live on the container disk, so they need reinstalling after restart.
+pip install -q -e ".[wan]" 2>/dev/null || pip install -q -e . 2>/dev/null
+pip install -q huggingface_hub hf_transfer
+echo "  Done: dimljus installed"
+
+# --- 3. Set up HuggingFace ---
 echo ""
-echo "[5/7] Configuring HuggingFace..."
+echo "[3/5] Configuring HuggingFace..."
 export HF_HUB_ENABLE_HF_TRANSFER=1
 
 # Check if HF_TOKEN is set (should be in pod environment variables)
@@ -83,9 +65,9 @@ else
     huggingface-cli login --token "$HF_TOKEN" 2>/dev/null || true
 fi
 
-# --- 6. Download models ---
+# --- 4. Download models ---
 echo ""
-echo "[6/7] Downloading models to /workspace/models/..."
+echo "[4/5] Downloading models to /workspace/models/..."
 echo "  This takes 10-20 minutes on first run (downloading ~35GB)."
 echo "  Subsequent runs skip already-downloaded files."
 
@@ -115,17 +97,6 @@ download_model() {
     echo "  Done: $(basename $dest)"
 }
 
-# Wan 2.2 I2V DiT weights (high + low noise experts)
-download_model \
-    "Comfy-Org/Wan_2.2_ComfyUI_Repackaged" \
-    "split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp16.safetensors" \
-    "/workspace/models/wan2.2_i2v_high_noise_14B_fp16.safetensors"
-
-download_model \
-    "Comfy-Org/Wan_2.2_ComfyUI_Repackaged" \
-    "split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp16.safetensors" \
-    "/workspace/models/wan2.2_i2v_low_noise_14B_fp16.safetensors"
-
 # Wan 2.2 T2V DiT weights (high + low noise experts)
 download_model \
     "Comfy-Org/Wan_2.2_ComfyUI_Repackaged" \
@@ -136,6 +107,17 @@ download_model \
     "Comfy-Org/Wan_2.2_ComfyUI_Repackaged" \
     "split_files/diffusion_models/wan2.2_t2v_low_noise_14B_fp16.safetensors" \
     "/workspace/models/wan2.2_t2v_low_noise_14B_fp16.safetensors"
+
+# Wan 2.2 I2V DiT weights (high + low noise experts)
+download_model \
+    "Comfy-Org/Wan_2.2_ComfyUI_Repackaged" \
+    "split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp16.safetensors" \
+    "/workspace/models/wan2.2_i2v_high_noise_14B_fp16.safetensors"
+
+download_model \
+    "Comfy-Org/Wan_2.2_ComfyUI_Repackaged" \
+    "split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp16.safetensors" \
+    "/workspace/models/wan2.2_i2v_low_noise_14B_fp16.safetensors"
 
 # VAE (shared across all Wan models)
 download_model \
@@ -149,12 +131,11 @@ download_model \
     "models_t5_umt5-xxl-enc-bf16.pth" \
     "/workspace/models/models_t5_umt5-xxl-enc-bf16.pth"
 
-# --- 7. Create directory structure ---
+# --- 5. Create directory structure ---
 echo ""
-echo "[7/7] Creating directory structure..."
+echo "[5/5] Creating directory structure..."
 mkdir -p /workspace/datasets
 mkdir -p /workspace/outputs
-mkdir -p /workspace/resume_checkpoints
 echo "  Done"
 
 # --- Done ---
@@ -168,16 +149,15 @@ ls -lh /workspace/models/*.safetensors /workspace/models/*.pth 2>/dev/null | awk
 echo ""
 echo "  Next steps:"
 echo "  1. Upload your dataset via Jupyter Lab"
-echo "     Drag your Videos/ and Images/ folders into /workspace/datasets/my_dataset/"
+echo "     Drag your video clips + .txt captions into /workspace/datasets/my_dataset/"
 echo ""
-echo "  2. Upload or edit your dataset config:"
-echo "     /workspace/dimljus/runpod/dataset-config.toml"
-echo "     Edit the paths inside to point to YOUR dataset directory"
+echo "  2. Copy and edit a training config:"
+echo "     cp /workspace/dimljus/examples/full_train.yaml /workspace/my_train.yaml"
+echo "     Edit data_config to point to your dataset directory"
 echo ""
 echo "  3. Start training:"
-echo "     cd /workspace/musubi-tuner"
 echo "     tmux new -s train"
-echo "     python /workspace/dimljus/runpod/train.py --variant t2v --noise_level high"
+echo "     python /workspace/dimljus/runpod/train.py --config /workspace/my_train.yaml"
 echo ""
 echo "  4. Download results from /workspace/outputs/ via Jupyter Lab"
 echo ""
