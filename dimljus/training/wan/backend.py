@@ -216,6 +216,10 @@ class WanModelBackend:
         if self._is_moe and expert is not None:
             return {"high_noise": self._dit_high_path,
                     "low_noise": self._dit_low_path}.get(expert)
+        # For MoE with no expert specified (unified phase), default to
+        # low_noise — it IS Wan 2.1, the correct starting point.
+        if self._is_moe and expert is None and self._dit_path is None:
+            return self._dit_low_path
         return self._dit_path
 
     def get_lora_target_modules(self) -> list[str]:

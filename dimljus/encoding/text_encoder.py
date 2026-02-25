@@ -144,11 +144,12 @@ class T5TextEncoder:
                         f"Expected .pth or .safetensors."
                     )
 
-                self._model = UMT5EncoderModel.from_pretrained(
-                    "google/umt5-xxl",
-                    torch_dtype=dtype,
-                    state_dict=state_dict,
-                )
+                # Create model from config, then load weights manually.
+                # Newer transformers don't allow state_dict + model name together.
+                from transformers import AutoConfig
+                config = AutoConfig.from_pretrained("google/umt5-xxl")
+                self._model = UMT5EncoderModel(config).to(dtype=dtype)
+                self._model.load_state_dict(state_dict, strict=False)
 
             # Priority 2: Wan model directory with text_encoder subfolder
             elif (model_path := Path(self._model_id)).is_dir() and (
