@@ -74,6 +74,18 @@ class CachedLatentDataset:
         # Pre-compute bucket keys for each index (used by sampler)
         self._bucket_keys: list[str] = [e.bucket_key for e in self._entries]
 
+        # Build stem → text_file lookup so ALL expansions of a stem share
+        # the same text encoding. Text is per-stem (same caption regardless
+        # of how many frames we take), but the cache manifest may only
+        # populate text_file for one expansion per stem.
+        self._stem_text_files: dict[str, str] = {}
+        for entry in self._entries:
+            if entry.text_file:
+                # Extract stem from sample_id: "{stem}_{frames}x{H}x{W}"
+                stem = _extract_stem(entry.sample_id)
+                if stem:
+                    self._stem_text_files[stem] = entry.text_file
+
     def __len__(self) -> int:
         return len(self._entries)
 
@@ -116,9 +128,15 @@ class CachedLatentDataset:
                     latent = latent.squeeze(0)
                 result["latent"] = latent
 
-        # Load text embedding
-        if entry.text_file:
-            text_path = self._cache_dir / entry.text_file
+        # Load text embedding — try entry's text_file first, then
+        # fall back to stem lookup (text is shared across expansions)
+        text_file = entry.text_file
+        if not text_file:
+            stem = _extract_stem(entry.sample_id)
+            text_file = self._stem_text_files.get(stem) if stem else None
+
+        if text_file:
+            text_path = self._cache_dir / text_file
             if text_path.is_file():
                 tensors = _load_safetensors(text_path)
                 result["text_emb"] = tensors.get("text_emb")
@@ -282,6 +300,23 @@ def collate_cached_batch(
             result[key] = [item[key] for item in batch]
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Stem extraction helper
+# ---------------------------------------------------------------------------
+
+def _extract_stem(sample_id: str) -> str | None:
+    """Extract the stem from a sample_id.
+
+    Sample IDs follow the pattern: "{stem}_{frames}x{H}x{W}"
+    e.g. "clip_scene001_33x720x1264" → "clip_scene001"
+
+    Returns None if the pattern doesn't match.
+    """
+    import re
+    match = re.match(r"^(.+)_\d+x\d+x\d+$", sample_id)
+    return match.group(1) if match else None
 
 
 # ---------------------------------------------------------------------------
