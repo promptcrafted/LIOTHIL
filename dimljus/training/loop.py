@@ -971,18 +971,25 @@ class TrainingOrchestrator:
         )
 
         try:
+            # Extract live LoRA weights from PEFT model (not stale lora.state_dict)
+            try:
+                from dimljus.training.wan.modules import extract_lora_state_dict
+                live_state_dict = extract_lora_state_dict(self._model)
+            except Exception:
+                live_state_dict = lora.state_dict
+
             samples = self._sampler.generate_samples(
                 pipeline=self._pipeline,
                 model=self._model,
-                lora_state_dict=lora.state_dict,
+                lora_state_dict=live_state_dict,
                 phase_type=phase.phase_type,
                 epoch=epoch,
             )
             for i, path in enumerate(samples):
                 self._logger.log_sample_generated(path, i)
-        except Exception:
-            # Sampling failure shouldn't crash training
-            pass
+        except Exception as e:
+            # Sampling failure shouldn't crash training, but log a warning
+            print(f"  Warning: Sampling failed (training continues): {e}")
 
     # ------------------------------------------------------------------
     # Final output

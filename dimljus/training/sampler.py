@@ -24,6 +24,52 @@ from dimljus.training.errors import SamplingError
 from dimljus.training.phase import PhaseType
 
 
+def _save_frames_to_video(frames: Any, output_path: Path, fps: int = 16) -> None:
+    """Save diffusers pipeline output frames to an MP4 file.
+
+    Diffusers WanPipeline returns frames as list[list[PIL.Image]], where
+    the outer list is the batch and the inner list is frames. We take
+    the first batch item and export all frames.
+
+    Uses diffusers' built-in export_to_video if available, otherwise
+    falls back to imageio.
+
+    Args:
+        frames: Pipeline output — list[list[PIL.Image]] or similar.
+        output_path: Path to save the .mp4 file.
+        fps: Frames per second for the output video.
+    """
+    try:
+        from diffusers.utils import export_to_video
+
+        # Diffusers returns list[list[PIL.Image]] — take first batch
+        if isinstance(frames, (list, tuple)) and len(frames) > 0:
+            if isinstance(frames[0], (list, tuple)):
+                frame_list = frames[0]
+            else:
+                frame_list = frames
+        else:
+            frame_list = frames
+
+        export_to_video(frame_list, str(output_path), fps=fps)
+        print(f"  Sample saved: {output_path}")
+
+    except ImportError:
+        # Fallback: save individual frames as PNG
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        png_dir = output_path.with_suffix("")
+        png_dir.mkdir(parents=True, exist_ok=True)
+
+        if isinstance(frames, (list, tuple)) and len(frames) > 0:
+            frame_list = frames[0] if isinstance(frames[0], (list, tuple)) else frames
+        else:
+            frame_list = frames
+
+        for idx, frame in enumerate(frame_list):
+            frame.save(png_dir / f"frame_{idx:04d}.png")
+        print(f"  Sample frames saved to: {png_dir}")
+
+
 class SamplingEngine:
     """Orchestrates when and how to generate training samples.
 
@@ -251,11 +297,12 @@ class SamplingEngine:
                     seed=seed,
                     reference_image=reference_image,
                 )
-                # If result is a path, use it; otherwise save to output_path
+                # If result is a path, use it; otherwise save frames to video
                 if isinstance(result, (str, Path)):
                     generated.append(Path(result))
                 else:
-                    # Pipeline returned data — save it
+                    # Pipeline returned frames — export to video file
+                    _save_frames_to_video(result, output_path)
                     generated.append(output_path)
 
             except Exception as e:

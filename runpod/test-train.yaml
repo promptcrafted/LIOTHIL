@@ -76,4 +76,11 @@ logging:
 
 # ── Sampling ────────────────────────────────────────────────────────
 sampling:
-  enabled: false
+  enabled: true
+  every_n_epochs: 3               # Sample at the end of each phase (3 epochs)
+  prompts:
+    - "A woman with dark hair styled in an updo walks down a city street, wearing a black dress and pearls, morning light."
+  neg: "blurry, low quality, distorted"
+  seed: 42
+  sample_steps: 20                # Fewer steps for faster test sampling
+  guidance_scale: 5.0
