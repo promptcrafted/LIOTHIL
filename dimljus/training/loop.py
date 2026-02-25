@@ -676,9 +676,17 @@ class TrainingOrchestrator:
         if latents is None:
             return 0.0
 
-        # Move latents to device and compute dtype
+        # Move all batch tensors to device and compute dtype
         if hasattr(latents, "to"):
             latents = latents.to(device=device, dtype=compute_dtype)
+        for key in ("text_emb", "text_mask", "reference"):
+            val = batch.get(key)
+            if val is not None and hasattr(val, "to"):
+                if key == "text_mask":
+                    # Attention masks stay as int, just move device
+                    batch[key] = val.to(device=device)
+                else:
+                    batch[key] = val.to(device=device, dtype=compute_dtype)
 
         batch_size = latents.shape[0]
 
