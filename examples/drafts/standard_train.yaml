@@ -1,0 +1,28 @@
+# Dimljus Training Config — Standard (USER-FACING)
+#
+# Common knobs most users want to tune. Template handles everything
+# else (optimizer internals, precision, noise sampling, MoE routing).
+
+model:
+  template: wan22_t2v
+  path: C:/Users/minta/Projects/dimljus/models/Wan2.2-T2V-A14B-Diffusers
+
+data_config: ./annika/dimljus_data.yaml
+
+lora:
+  rank: 16
+  alpha: 16                              # Match rank for 1.0x scaling
+  loraplus_lr_ratio: 4.0
+
+optimizer:
+  learning_rate: 5e-5                    # Conservative default for Wan 2.2
+
+training:
+  unified_epochs: 10                     # Shared LoRA phase before expert fork
+  caption_dropout_rate: 0.1
+  seed: 42
+
+save:
+  output_dir: ./output/annika_v1
+  name: annika_lora
+  save_every_n_epochs: 10

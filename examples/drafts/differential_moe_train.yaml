@@ -1,0 +1,57 @@
+# Dimljus Training Config — Fork-and-Specialize (USER-FACING)
+#
+# This is the core Dimljus innovation: unified warmup → fork → per-expert
+# specialization with independent hyperparameters.
+#
+# Wan 2.2 uses a dual-expert MoE where the HIGH-NOISE expert handles early
+# denoising (global composition, motion) and the LOW-NOISE expert handles
+# late denoising (fine detail, texture).
+#
+# Key finding: these experts need fundamentally different training treatment.
+# - High-noise converges FASTER on coarse features → higher LR, fewer epochs
+# - Low-noise needs LONGER, GENTLER refinement → lower LR, more epochs
+# - Low-noise overfits RAPIDLY when pushed → washed-out artifacts, lost texture
+#
+# How fork-and-specialize works:
+#   1. Unified phase: both experts share one LoRA for unified_epochs
+#   2. Fork: the unified LoRA is copied — one copy per expert
+#   3. Expert phase: each copy trains independently with its own overrides
+#      (interleaved in the same loop via timestep routing, NOT sequential)
+
+model:
+  template: wan22_t2v
+  path: C:/Users/minta/Projects/dimljus/models/Wan2.2-T2V-A14B-Diffusers
+
+data_config: ./annika/dimljus_data.yaml
+
+lora:
+  rank: 16                               # Locked for entire run (determines matrix shape)
+  alpha: 16                              # Match rank for 1.0x scaling
+
+moe:
+  fork_enabled: true                     # This is the master switch
+
+  high_noise:
+    learning_rate: 1e-4                  # Higher LR — converges fast on composition
+    max_epochs: 30                       # Fewer epochs — coarse features learned quickly
+    # fork_targets: ["ffn", "self_attn"] # Optional: focus on most-divergent components
+    # block_targets: "0-11"              # Optional: early blocks diverged most (55%)
+
+  low_noise:
+    learning_rate: 8e-5                  # Lower LR — prevents overfitting on detail
+    max_epochs: 50                       # More epochs — slow, careful refinement
+    # dropout: 0.05                      # Consider higher dropout for low-noise
+    # weight_decay: 0.02                 # Consider higher regularization for low-noise
+
+  # boundary_ratio: 0.875               # Override expert routing boundary if needed
+
+training:
+  unified_epochs: 10                     # Shared phase duration (hypothesis — tune this)
+  # unified_targets: null                # null = all LoRA targets during unified
+  # unified_block_targets: null          # null = all 40 blocks during unified
+  seed: 42
+
+save:
+  output_dir: ./output/annika_fork
+  name: annika_fork_lora
+  save_every_n_epochs: 5

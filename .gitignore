@@ -33,6 +33,7 @@ terraform.tfvars
 
 # --- Claude Code ---
 CLAUDE.local.md
+.claude/
 
 # --- Python ---
 __pycache__/

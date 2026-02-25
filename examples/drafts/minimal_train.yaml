@@ -1,0 +1,10 @@
+# Dimljus Training Config — Minimal (USER-FACING)
+#
+# Pick your model, point at your data. Everything else comes from the
+# template defaults. This is the simplest possible training config.
+
+model:
+  template: wan22_t2v
+  path: C:/Users/minta/Projects/dimljus/models/Wan2.2-T2V-A14B-Diffusers
+
+data_config: ./my_dataset/dimljus_data.yaml
