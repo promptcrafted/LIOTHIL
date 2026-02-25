@@ -108,7 +108,13 @@ class CachedLatentDataset:
             latent_path = self._cache_dir / entry.latent_file
             if latent_path.is_file():
                 tensors = _load_safetensors(latent_path)
-                result["latent"] = tensors.get("latent")
+                latent = tensors.get("latent")
+                # VAE encoder saves with batch dim [1, C, F, H, W];
+                # squeeze to [C, F, H, W] so DataLoader can add the
+                # real batch dimension during collation.
+                if latent is not None and latent.ndim == 5 and latent.shape[0] == 1:
+                    latent = latent.squeeze(0)
+                result["latent"] = latent
 
         # Load text embedding
         if entry.text_file:
