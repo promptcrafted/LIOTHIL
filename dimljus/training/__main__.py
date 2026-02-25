@@ -34,12 +34,17 @@ def cmd_train(args: argparse.Namespace) -> None:
     if config.sampling.enabled:
         inference_pipeline = _resolve_inference_pipeline(config)
 
+    # Load cached dataset (unless dry run)
+    dataset = None
+    if not args.dry_run:
+        dataset = _load_dataset(config)
+
     orchestrator = TrainingOrchestrator(
         config=config,
         model_backend=backend,
         inference_pipeline=inference_pipeline,
     )
-    orchestrator.run(dry_run=args.dry_run)
+    orchestrator.run(dataset=dataset, dry_run=args.dry_run)
 
 
 def cmd_plan(args: argparse.Namespace) -> None:
@@ -56,6 +61,32 @@ def cmd_plan(args: argparse.Namespace) -> None:
         inference_pipeline=None,
     )
     orchestrator.run(dry_run=True)
+
+
+def _load_dataset(config: object) -> object:
+    """Load the CachedLatentDataset from the encoding cache.
+
+    Reads the cache manifest and builds a map-style dataset that the
+    training loop can iterate over.
+
+    Args:
+        config: DimljusTrainingConfig instance.
+
+    Returns:
+        CachedLatentDataset ready for DataLoader.
+    """
+    from pathlib import Path
+    from dimljus.encoding.cache import load_cache_manifest
+    from dimljus.encoding.dataset import CachedLatentDataset
+
+    cache_dir = Path(config.cache.cache_dir)
+    print(f"Loading cached dataset from: {cache_dir}")
+
+    manifest = load_cache_manifest(cache_dir)
+    dataset = CachedLatentDataset(manifest=manifest, cache_dir=cache_dir)
+
+    print(f"  Loaded: {len(dataset)} training samples")
+    return dataset
 
 
 def _resolve_backend(config: object) -> object:
