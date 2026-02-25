@@ -154,6 +154,11 @@ def get_wan_backend(config: Any) -> Any:
     dit_high_path = getattr(config.model, "dit_high", None)
     dit_low_path = getattr(config.model, "dit_low", None)
 
+    # Resolve preload_experts from MoE config (default: False)
+    preload_experts = False
+    if hasattr(config, "moe"):
+        preload_experts = getattr(config.moe, "preload_experts", False)
+
     return WanModelBackend(
         model_id=info["model_id"],
         model_path=config.model.path or "",
@@ -168,4 +173,5 @@ def get_wan_backend(config: Any) -> Any:
         dit_path=dit_path,
         dit_high_path=dit_high_path,
         dit_low_path=dit_low_path,
+        preload_experts=preload_experts,
     )

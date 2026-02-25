@@ -125,6 +125,10 @@ moe:
   enabled: true                            # This model has two noise-level experts
   fork_enabled: true                       # true = fork into per-expert LoRAs (recommended)
   boundary_ratio: null                     # null = model default (T2V: 0.875, I2V: 0.900)
+  preload_experts: false                   # true = pre-load inactive expert to CPU RAM
+                                           #   for fast switching (~3s). Needs ~27GB RAM.
+                                           # false = reload from disk each switch (~30s).
+                                           #   Works on any machine. Set true on cloud pods.
 
   # Per-expert overrides — null = inherit from unified/optimizer/scheduler
   high_noise:                              # Composition & motion (early denoising)

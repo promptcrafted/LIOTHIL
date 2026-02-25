@@ -403,7 +403,9 @@ class TestPrepareModelInputs:
         inputs = backend.prepare_model_inputs(batch, torch.tensor([0.5, 0.3]), noisy_latents)
 
         assert "encoder_hidden_states" in inputs
-        assert "encoder_attention_mask" in inputs
+        # Wan's forward() builds its own attention mask internally,
+        # so we do NOT pass encoder_attention_mask (removed in GPU validation).
+        assert "encoder_attention_mask" not in inputs
 
     def test_no_text_means_no_text_keys(self):
         """When text_emb is None the encoder keys must be absent."""

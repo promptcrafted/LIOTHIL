@@ -299,7 +299,11 @@ class TrainingOrchestrator:
 
         For MoE models, each expert phase needs a specific transformer
         (high_noise vs low_noise subfolder). If the wrong expert is
-        currently loaded, remove any LoRA, then load the correct one.
+        currently loaded, remove any LoRA, then switch experts.
+
+        Two switching strategies (chosen by backend based on config):
+        - State-dict swap (preload_experts=True): fast, in-place
+        - Disk reload (default): slower, but no extra RAM
 
         For non-MoE models or unified phases, this is a no-op.
         """
@@ -318,11 +322,21 @@ class TrainingOrchestrator:
         except ImportError:
             pass
 
-        # Load the correct expert model and move to GPU
-        self._model = self._backend.load_model(
-            self._config.model,
-            expert=phase.active_expert,
-        )
+        # Switch expert via the backend (handles both swap and reload)
+        if hasattr(self._backend, "switch_expert"):
+            self._model = self._backend.switch_expert(
+                self._model,
+                new_expert=phase.active_expert,
+                config=self._config.model,
+            )
+        else:
+            # Fallback for non-Wan backends: load from scratch
+            self._model = self._backend.load_model(
+                self._config.model,
+                expert=phase.active_expert,
+            )
+
+        # Ensure model is on GPU
         if hasattr(self._model, "to"):
             import torch
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

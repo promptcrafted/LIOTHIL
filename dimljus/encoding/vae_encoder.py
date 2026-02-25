@@ -324,12 +324,20 @@ class WanVaeEncoder:
         return tensor
 
     def cleanup(self) -> None:
-        """Release GPU memory."""
+        """Release GPU memory.
+
+        Uses gc.collect() before torch.cuda.empty_cache() to ensure
+        Python objects holding CUDA tensor references are freed first.
+        Without gc.collect(), empty_cache() cannot reclaim memory held
+        by unreachable but not-yet-collected Python objects.
+        """
         if self._vae is not None:
             del self._vae
             self._vae = None
             try:
+                import gc
                 import torch
+                gc.collect()
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
             except ImportError:

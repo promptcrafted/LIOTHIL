@@ -1206,6 +1206,18 @@ class MoeConfig(BaseModel):
         ),
     )
 
+    preload_experts: bool = Field(
+        default=False,
+        description=(
+            "Pre-load both expert weight sets into CPU RAM at startup for "
+            "faster expert switching (~3s swap vs ~30s disk reload). "
+            "Requires ~27GB extra CPU RAM for the inactive expert. "
+            "Default: false (reload from disk each switch — slower but "
+            "works on machines with limited RAM). Set true on cloud pods "
+            "or machines with 64GB+ RAM."
+        ),
+    )
+
     # ── Per-expert overrides ──
 
     high_noise: MoeExpertOverrides = Field(

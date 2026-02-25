@@ -9,20 +9,49 @@ This is the real model backend that replaces Phase 7's stubs. It handles:
     - Setting up gradient checkpointing
 
 For MoE models (Wan 2.2), the backend loads one expert at a time.
-Expert switching happens at phase transitions — the old expert is
-unloaded and the new one loaded from disk.
+Expert switching happens at phase transitions via one of two strategies:
+
+    - **Disk reload** (default): the old expert is deleted, GPU memory
+      reclaimed, and the new expert loaded fresh from disk. Slower
+      (~30s) but uses no extra CPU RAM. Works on any machine.
+
+    - **State-dict swap** (preload_experts=True): both expert state
+      dicts are loaded at startup. The inactive one lives on CPU.
+      Switching uses load_state_dict(assign=True) — nearly instant
+      (~3s). Requires ~27GB extra CPU RAM for the inactive dict.
+      Best for cloud pods or machines with 64GB+ RAM.
 
 Requires: torch, diffusers, peft (the 'wan' dependency group).
 """
 
 from __future__ import annotations
 
+import gc
 from pathlib import Path
 from typing import Any
 
 from dimljus.training.errors import ModelBackendError
 from dimljus.training.noise import FlowMatchingSchedule, get_expert_masks
 from dimljus.training.wan.constants import WAN_EXPERT_SUBFOLDERS, WAN_SINGLE_SUBFOLDER
+
+
+def _clean_gpu_memory() -> None:
+    """Force Python garbage collection and clear CUDA cache.
+
+    Every open-source trainer (musubi, ai-toolkit, diffusers) does this
+    in the same order: gc.collect() first to free Python objects holding
+    CUDA tensor references, THEN torch.cuda.empty_cache() to reclaim
+    the underlying GPU memory. Without gc.collect(), empty_cache()
+    cannot reclaim memory held by unreachable-but-not-yet-collected
+    Python objects.
+    """
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
 
 
 class WanModelBackend:
@@ -47,6 +76,9 @@ class WanModelBackend:
         dit_path: Path to a single safetensors file for non-MoE models.
         dit_high_path: Path to high-noise expert safetensors (MoE only).
         dit_low_path: Path to low-noise expert safetensors (MoE only).
+        preload_experts: If True, load both expert state dicts to CPU at
+            startup for fast switching. If False (default), reload from
+            disk each time.
     """
 
     def __init__(
@@ -64,6 +96,7 @@ class WanModelBackend:
         dit_path: str | None = None,
         dit_high_path: str | None = None,
         dit_low_path: str | None = None,
+        preload_experts: bool = False,
     ) -> None:
         self._model_id = model_id
         self._model_path = model_path
@@ -82,8 +115,15 @@ class WanModelBackend:
         self._dit_high_path = dit_high_path
         self._dit_low_path = dit_low_path
 
+        # Expert switching mode
+        self._preload_experts = preload_experts
+
         # Track which expert is currently loaded (for MoE switching)
         self._current_expert: str | None = None
+
+        # Pre-loaded state dicts for fast expert switching (CPU RAM).
+        # Only populated when preload_experts=True.
+        self._cached_state_dicts: dict[str, dict[str, Any]] = {}
 
     # -- ModelBackend protocol properties --
 
@@ -154,10 +194,13 @@ class WanModelBackend:
 
         if single_file is not None:
             # -- Single-file loading --
+            # Load to CPU first, then the caller moves to GPU. This avoids
+            # competing with any leftover VRAM from a previous model.
             try:
                 model = WanTransformer3DModel.from_single_file(
                     single_file,
                     torch_dtype=dtype,
+                    device="cpu",
                 )
             except Exception as e:
                 raise ModelBackendError(
@@ -204,7 +247,187 @@ class WanModelBackend:
                 ) from e
 
         self._current_expert = expert
+
+        # If preload_experts is enabled and this is MoE, cache the other
+        # expert's state dict to CPU for fast switching later.
+        if self._preload_experts and self._is_moe and expert is not None:
+            self._preload_other_expert(config, expert, dtype)
+
         return model
+
+    def _preload_other_expert(
+        self,
+        config: Any,
+        loaded_expert: str,
+        dtype: Any,
+    ) -> None:
+        """Pre-load the OTHER expert's state dict to CPU RAM.
+
+        Called once after the first expert is loaded. The inactive expert's
+        weights are stored as a plain dict (not an nn.Module) — this uses
+        less memory than a full model since there are no grad buffers,
+        optimizer state, or PEFT wrappers.
+
+        Args:
+            config: ModelConfig from training schema.
+            loaded_expert: The expert we just loaded ('high_noise' or 'low_noise').
+            dtype: Torch dtype for loading.
+        """
+        other = "low_noise" if loaded_expert == "high_noise" else "high_noise"
+
+        # Skip if already cached
+        if other in self._cached_state_dicts:
+            return
+
+        other_file = self._resolve_single_file_path(other)
+        if other_file is None:
+            return
+
+        try:
+            from safetensors.torch import load_file
+
+            print(f"  Pre-loading {other} expert to CPU RAM for fast switching...")
+            self._cached_state_dicts[other] = load_file(
+                other_file, device="cpu"
+            )
+            # Also cache the current expert's state dict (will be populated
+            # from the live model when we first switch away from it)
+            print(f"  Pre-loading complete. Fast expert switching enabled.")
+        except Exception as e:
+            print(
+                f"  Warning: Could not pre-load {other} expert ({e}). "
+                f"Falling back to disk reload for switching."
+            )
+            self._preload_experts = False
+
+    def switch_expert(
+        self,
+        model: Any,
+        new_expert: str,
+        config: Any,
+    ) -> Any:
+        """Switch to a different expert, using the best available method.
+
+        Two strategies:
+        1. **State-dict swap** (preload_experts=True): swaps weights in-place
+           using load_state_dict(assign=True). The old expert's state dict
+           is saved to the CPU cache. Nearly instant (~3s).
+        2. **Disk reload** (default): deletes the old model, reclaims GPU
+           memory, then loads the new expert from disk. Slower (~30s) but
+           uses no extra CPU RAM.
+
+        Args:
+            model: The currently loaded WanTransformer3DModel (on GPU).
+            new_expert: Expert to switch to ('high_noise' or 'low_noise').
+            config: ModelConfig from training schema.
+
+        Returns:
+            The model with new expert weights loaded. May be the same
+            object (swap) or a new object (disk reload).
+        """
+        if self._current_expert == new_expert:
+            return model
+
+        if self._preload_experts and self._cached_state_dicts:
+            return self._switch_via_state_dict(model, new_expert)
+        else:
+            return self._switch_via_disk_reload(model, new_expert, config)
+
+    def _switch_via_state_dict(
+        self,
+        model: Any,
+        new_expert: str,
+    ) -> Any:
+        """Fast expert switch: swap state dicts in-place.
+
+        Uses load_state_dict(assign=True) which replaces tensor storage
+        without copying — avoids doubling memory during the swap. This
+        is the same approach musubi-tuner uses.
+
+        Args:
+            model: Currently loaded model (on GPU).
+            new_expert: Expert to switch to.
+
+        Returns:
+            Same model object with new weights.
+        """
+        import torch
+
+        old_expert = self._current_expert
+
+        if new_expert not in self._cached_state_dicts:
+            raise ModelBackendError(
+                f"State dict for '{new_expert}' not pre-loaded. "
+                f"Available: {list(self._cached_state_dicts.keys())}"
+            )
+
+        # Get the base model (unwrap PEFT if needed)
+        base_model = model
+        if hasattr(model, "get_base_model"):
+            base_model = model.get_base_model()
+
+        # Save current weights to CPU cache before swapping
+        print(f"  Swapping expert: {old_expert} → {new_expert} (state dict swap)...")
+        if old_expert is not None:
+            self._cached_state_dicts[old_expert] = {
+                k: v.to("cpu") for k, v in base_model.state_dict().items()
+            }
+
+        # Load new expert weights — assign=True replaces storage in-place
+        # to avoid doubling memory (requires PyTorch 2.1+)
+        new_state = self._cached_state_dicts.pop(new_expert)
+        device = next(
+            (p.device for p in base_model.parameters()),
+            torch.device("cpu"),
+        )
+        new_state_gpu = {k: v.to(device) for k, v in new_state.items()}
+        base_model.load_state_dict(new_state_gpu, strict=True, assign=True)
+        del new_state, new_state_gpu
+        _clean_gpu_memory()
+
+        self._current_expert = new_expert
+        print(f"  Expert switch complete.")
+        return model
+
+    def _switch_via_disk_reload(
+        self,
+        model: Any,
+        new_expert: str,
+        config: Any,
+    ) -> Any:
+        """Slow expert switch: delete old model, reload from disk.
+
+        Properly sequences the cleanup to avoid having two models alive:
+        1. Move old model to CPU (frees GPU VRAM)
+        2. Delete old model
+        3. gc.collect() + empty_cache() (reclaim everything)
+        4. Load new model from disk
+
+        Args:
+            model: Currently loaded model (on GPU).
+            new_expert: Expert to switch to.
+            config: ModelConfig for loading.
+
+        Returns:
+            New model object with new expert weights.
+        """
+        old_expert = self._current_expert
+        print(f"  Switching expert: {old_expert} → {new_expert} (disk reload)...")
+
+        # Step 1: Move old model to CPU to free GPU VRAM immediately
+        if hasattr(model, "to"):
+            model.to("cpu")
+
+        # Step 2: Delete the old model
+        del model
+
+        # Step 3: Reclaim all memory (gc.collect is critical here)
+        _clean_gpu_memory()
+
+        # Step 4: Load new expert from disk
+        new_model = self.load_model(config, expert=new_expert)
+        print(f"  Expert switch complete.")
+        return new_model
 
     def _resolve_single_file_path(self, expert: str | None) -> str | None:
         """Determine which single-file path to use, if any.

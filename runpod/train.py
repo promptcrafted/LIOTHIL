@@ -182,21 +182,47 @@ def validate_config(config_path: str) -> None:
 # =============================================================================
 
 def run_cache_latents(config_path: str, dry_run: bool = False) -> None:
-    """Run latent pre-encoding (VAE)."""
-    from argparse import Namespace
-    from dimljus.encoding.__main__ import cmd_cache_latents
+    """Run latent pre-encoding (VAE) in a subprocess.
 
-    args = Namespace(config=config_path, force=False, dry_run=dry_run)
-    cmd_cache_latents(args)
+    Running encoding as a separate process ensures the OS fully reclaims
+    all GPU memory when encoding finishes. This is critical because Python's
+    gc.collect() + torch.cuda.empty_cache() cannot guarantee full VRAM
+    reclamation — leaked references or fragmentation can leave the GPU
+    partially occupied. Subprocess isolation is what musubi-tuner uses
+    (separate scripts) and is the safest approach.
+    """
+    import subprocess
+    cmd = [
+        sys.executable, "-m", "dimljus.encoding", "cache-latents",
+        "--config", config_path,
+    ]
+    if dry_run:
+        cmd.append("--dry-run")
+
+    result = subprocess.run(cmd, env={**os.environ, "PYTHONUNBUFFERED": "1"})
+    if result.returncode != 0:
+        print(f"\nERROR: Latent encoding failed (exit code {result.returncode})")
+        sys.exit(result.returncode)
 
 
 def run_cache_text(config_path: str, dry_run: bool = False) -> None:
-    """Run text pre-encoding (T5)."""
-    from argparse import Namespace
-    from dimljus.encoding.__main__ import cmd_cache_text
+    """Run text pre-encoding (T5) in a subprocess.
 
-    args = Namespace(config=config_path, dry_run=dry_run)
-    cmd_cache_text(args)
+    Same rationale as run_cache_latents — subprocess isolation ensures
+    T5's ~10GB VRAM is fully reclaimed before training loads the ~27GB DiT.
+    """
+    import subprocess
+    cmd = [
+        sys.executable, "-m", "dimljus.encoding", "cache-text",
+        "--config", config_path,
+    ]
+    if dry_run:
+        cmd.append("--dry-run")
+
+    result = subprocess.run(cmd, env={**os.environ, "PYTHONUNBUFFERED": "1"})
+    if result.returncode != 0:
+        print(f"\nERROR: Text encoding failed (exit code {result.returncode})")
+        sys.exit(result.returncode)
 
 
 def run_training(config_path: str, dry_run: bool = False) -> None:
