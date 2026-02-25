@@ -162,8 +162,12 @@ class TrainingOrchestrator:
             if state.low_noise_lora_path:
                 self._low_noise_lora = LoRAState.load(state.low_noise_lora_path)
 
-        # Load model
+        # Load model and move to GPU
         self._model = self._backend.load_model(self._config.model)
+        if hasattr(self._model, "to"):
+            import torch
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            self._model.to(device)
         if self._config.training.gradient_checkpointing:
             self._backend.setup_gradient_checkpointing(self._model)
 
@@ -314,11 +318,15 @@ class TrainingOrchestrator:
         except ImportError:
             pass
 
-        # Load the correct expert model
+        # Load the correct expert model and move to GPU
         self._model = self._backend.load_model(
             self._config.model,
             expert=phase.active_expert,
         )
+        if hasattr(self._model, "to"):
+            import torch
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            self._model.to(device)
         if self._config.training.gradient_checkpointing:
             self._backend.setup_gradient_checkpointing(self._model)
 
