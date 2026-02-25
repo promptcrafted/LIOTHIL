@@ -145,10 +145,11 @@ class T5TextEncoder:
                     )
 
                 # Create model from config, then load weights manually.
-                # Newer transformers don't allow state_dict + model name together.
-                from transformers import AutoConfig
-                config = AutoConfig.from_pretrained("google/umt5-xxl")
-                self._model = UMT5EncoderModel(config).to(dtype=dtype)
+                # Newer transformers don't allow state_dict + model name together,
+                # and AutoConfig can't resolve umt5-xxl on some versions.
+                from transformers import UMT5Config
+                t5_config = UMT5Config.from_pretrained("google/umt5-xxl")
+                self._model = UMT5EncoderModel(t5_config).to(dtype=dtype)
                 self._model.load_state_dict(state_dict, strict=False)
 
             # Priority 2: Wan model directory with text_encoder subfolder
