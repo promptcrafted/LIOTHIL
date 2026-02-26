@@ -29,13 +29,32 @@ def _unwrap_frames(frames: Any) -> list[Any]:
 
     Diffusers WanPipeline returns frames as list[list[PIL.Image]] or
     list[list[numpy.ndarray]], where the outer list is the batch.
-    This extracts the first batch item.
+    Numpy arrays may have extra batch dimensions (1, 1, H, W, C) that
+    need squeezing.
     """
+    import numpy as np
+
     if isinstance(frames, (list, tuple)) and len(frames) > 0:
         if isinstance(frames[0], (list, tuple)):
-            return list(frames[0])
-        return list(frames)
-    return list(frames) if frames is not None else []
+            frame_list = list(frames[0])
+        else:
+            frame_list = list(frames)
+    elif frames is not None:
+        frame_list = list(frames)
+    else:
+        return []
+
+    # Squeeze extra batch dimensions from numpy arrays
+    # WanPipeline can return (1, 1, H, W, C) or (1, H, W, C) arrays
+    squeezed = []
+    for frame in frame_list:
+        if isinstance(frame, np.ndarray):
+            while frame.ndim > 3:
+                frame = frame.squeeze(0)
+            squeezed.append(frame)
+        else:
+            squeezed.append(frame)
+    return squeezed
 
 
 def _save_frames_to_video(frames: Any, output_path: Path, fps: int = 16) -> None:
