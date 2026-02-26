@@ -276,11 +276,15 @@ def _resolve_paths(data: dict, base_dir: Path) -> dict:
             _resolve_one(sampling_block["sample_dir"], base_dir)
         )
 
-    # Resolve cache.cache_dir
-    cache_block = data.get("cache", {})
-    if isinstance(cache_block, dict) and "cache_dir" in cache_block:
+    # Resolve cache.cache_dir (always, even when using default)
+    if "cache" not in data:
+        data["cache"] = {}
+    cache_block = data["cache"]
+    if isinstance(cache_block, dict):
+        # Use default "./cache" if not specified, then resolve relative to config
+        cache_dir = cache_block.get("cache_dir", "./cache")
         cache_block["cache_dir"] = str(
-            _resolve_one(cache_block["cache_dir"], base_dir)
+            _resolve_one(cache_dir, base_dir)
         )
 
     return data

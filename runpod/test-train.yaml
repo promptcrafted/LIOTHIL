@@ -25,6 +25,10 @@ model:
 
 data_config: /workspace/datasets/test/dimljus_data.yaml
 
+# ── Cache ─────────────────────────────────────────────────────────
+cache:
+  cache_dir: /workspace/dimljus/cache
+
 
 # ── LoRA ────────────────────────────────────────────────────────────
 lora:
