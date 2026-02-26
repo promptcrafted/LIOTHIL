@@ -130,7 +130,7 @@ def main() -> None:
 
     vae = AutoencoderKLWan.from_single_file(args.vae, torch_dtype=torch.bfloat16)
     vae = vae.to("cuda")
-    scheduler = FlowMatchEulerDiscreteScheduler()
+    scheduler = FlowMatchEulerDiscreteScheduler(shift=3.0)
 
     pipeline = WanPipeline(
         transformer=model,

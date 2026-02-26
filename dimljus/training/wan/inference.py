@@ -395,8 +395,10 @@ class WanInferencePipeline:
         # Load VAE (small: ~243MB)
         vae = self._load_vae()
 
-        # Create scheduler (no GPU memory needed)
-        scheduler = FlowMatchEulerDiscreteScheduler()
+        # Create scheduler with flow_shift=3.0 for Wan models
+        # Without shift, the noise schedule is wrong and produces garbage output.
+        # ai-toolkit uses flow_shift=3.0, musubi uses shift=3.0
+        scheduler = FlowMatchEulerDiscreteScheduler(shift=3.0)
 
         if self._is_i2v:
             from diffusers import WanImageToVideoPipeline

@@ -99,7 +99,14 @@ def main():
         torch_dtype=torch.bfloat16
     )
     vae = vae.to("cuda")
-    scheduler = FlowMatchEulerDiscreteScheduler()
+
+    # ai-toolkit uses UniPCMultistepScheduler with flow_shift=3.0 for Wan
+    # musubi uses FlowUniPCMultistepScheduler with shift=3.0
+    # FlowMatchEulerDiscreteScheduler without shift produces garbage
+    from diffusers import FlowMatchEulerDiscreteScheduler
+
+    # Try with shift parameter — this controls the noise schedule
+    scheduler = FlowMatchEulerDiscreteScheduler(shift=3.0)
 
     pipeline = WanPipeline(
         transformer=model,
@@ -109,9 +116,10 @@ def main():
         scheduler=scheduler,
     )
 
-    # ── Test 1: Base model only, 5 steps, small ──────────────────
+    # ── Test 1: Base model only, 20 steps ────────────────────────
     print("\n" + "=" * 60)
-    print("  TEST A: Base model, no LoRA, 5 steps, 480x832, 17 frames")
+    print("  TEST A: Base model, no LoRA, 20 steps, 480x832, 17 frames")
+    print("  Scheduler: FlowMatchEulerDiscreteScheduler(shift=3.0)")
     print("=" * 60)
 
     generator = torch.Generator(device="cuda").manual_seed(42)
@@ -119,7 +127,7 @@ def main():
         output = pipeline(
             prompt_embeds=prompt_embeds.to("cuda", dtype=torch.bfloat16),
             negative_prompt_embeds=neg_embeds.to("cuda", dtype=torch.bfloat16),
-            num_inference_steps=5,
+            num_inference_steps=20,
             guidance_scale=5.0,
             height=480,
             width=832,
@@ -136,7 +144,7 @@ def main():
 
     # ── Test 2: With LoRA, 5 steps ──────────────────────────────
     print("\n" + "=" * 60)
-    print("  TEST B: With LoRA, 5 steps, 480x832, 17 frames")
+    print("  TEST B: With LoRA, 20 steps, 480x832, 17 frames")
     print("=" * 60)
 
     # Remove model from pipeline temporarily
@@ -163,13 +171,13 @@ def main():
     inject_lora_state_dict(model, lora_sd)
     model.eval()
 
-    # Rebuild pipeline
+    # Rebuild pipeline with same scheduler config
     pipeline = WanPipeline(
         transformer=model,
         vae=vae,
         text_encoder=None,
         tokenizer=None,
-        scheduler=FlowMatchEulerDiscreteScheduler(),
+        scheduler=FlowMatchEulerDiscreteScheduler(shift=3.0),
     )
 
     generator = torch.Generator(device="cuda").manual_seed(42)
@@ -177,7 +185,7 @@ def main():
         output = pipeline(
             prompt_embeds=prompt_embeds.to("cuda", dtype=torch.bfloat16),
             negative_prompt_embeds=neg_embeds.to("cuda", dtype=torch.bfloat16),
-            num_inference_steps=5,
+            num_inference_steps=20,
             guidance_scale=5.0,
             height=480,
             width=832,
