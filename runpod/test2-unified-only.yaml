@@ -1,0 +1,63 @@
+# =============================================================================
+# Test 2: Unified Only — No forking, no expert phases
+# =============================================================================
+# Validates that the pipeline works in unified-only mode (fork_enabled: false).
+# Should produce 1 phase (UNIFIED) with 3 epochs and 3 checkpoints.
+
+# ── Model ───────────────────────────────────────────────────────────
+model:
+  variant: 2.2_t2v
+  dit_high: /workspace/models/wan2.2_t2v_high_noise_14B_fp16.safetensors
+  dit_low: /workspace/models/wan2.2_t2v_low_noise_14B_fp16.safetensors
+  vae: /workspace/models/wan_2.1_vae.safetensors
+  t5: /workspace/models/models_t5_umt5-xxl-enc-bf16.pth
+
+data_config: /workspace/datasets/test/dimljus_data.yaml
+
+cache:
+  cache_dir: /workspace/dimljus/cache
+
+# ── LoRA ────────────────────────────────────────────────────────────
+lora:
+  rank: 16
+  alpha: 16
+
+# ── Optimizer ───────────────────────────────────────────────────────
+optimizer:
+  type: adamw8bit
+  learning_rate: 5e-5
+
+# ── Training ────────────────────────────────────────────────────────
+training:
+  mixed_precision: bf16
+  gradient_checkpointing: true
+  seed: 42
+  unified_epochs: 3
+  batch_size: 1
+
+# ── MoE ─────────────────────────────────────────────────────────────
+moe:
+  enabled: true
+  fork_enabled: false                  # KEY: no forking, unified only
+
+# ── Save ────────────────────────────────────────────────────────────
+save:
+  save_every_n_epochs: 1
+  output_dir: /workspace/outputs/test2-unified-only
+  name: test_lora
+
+# ── Logging ─────────────────────────────────────────────────────────
+logging:
+  backends: [console]
+  log_every_n_steps: 1
+
+# ── Sampling ────────────────────────────────────────────────────────
+sampling:
+  enabled: true
+  every_n_epochs: 3
+  prompts:
+    - "A woman with dark hair styled in an updo walks down a city street, wearing a black dress and pearls, morning light."
+  neg: "blurry, low quality, distorted"
+  seed: 42
+  sample_steps: 20
+  guidance_scale: 5.0
