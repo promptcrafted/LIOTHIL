@@ -56,40 +56,35 @@ def main() -> None:
 
     # ── Step 2: Apply LoRA ────────────────────────────────────────────
     print("\nStep 2: Applying LoRA...")
-    from peft import PeftModel, LoraConfig
     from safetensors.torch import load_file
+    from dimljus.training.wan.modules import (
+        create_lora_on_model, inject_lora_state_dict,
+    )
+    from dimljus.training.wan.constants import T2V_LORA_TARGETS
 
     lora_sd = load_file(args.lora)
     print(f"  LoRA keys: {len(lora_sd)}")
     print(f"  LoRA size: {sum(v.numel() for v in lora_sd.values()) / 1e6:.1f}M params")
 
-    # Figure out target modules from the LoRA keys
-    target_modules = set()
-    for key in lora_sd.keys():
-        # Keys look like: base_model.model.blocks.0.attn1.to_q.lora_A.weight
-        parts = key.split(".")
-        for i, part in enumerate(parts):
-            if part in ("lora_A", "lora_B"):
-                # The module name is the part just before lora_A/lora_B
-                target_modules.add(parts[i - 1])
-                break
-    print(f"  Target modules: {sorted(target_modules)}")
-
     # Get rank from first lora_A weight
+    rank = 16
     for key, val in lora_sd.items():
         if "lora_A" in key:
             rank = val.shape[0]
             break
     print(f"  Rank: {rank}")
+    print(f"  Target modules: {T2V_LORA_TARGETS}")
 
-    lora_config = LoraConfig(
-        r=rank,
-        lora_alpha=rank,  # 1.0x scaling
-        target_modules=list(target_modules),
-        lora_dropout=0.0,
+    # Create PEFT LoRA on the model using our standard function
+    model = create_lora_on_model(
+        model=model,
+        target_modules=T2V_LORA_TARGETS,
+        rank=rank,
+        alpha=rank,
+        dropout=0.0,
     )
-    model = PeftModel(model, lora_config)
-    model.load_state_dict(lora_sd, strict=False)
+    # Inject the trained weights
+    inject_lora_state_dict(model, lora_sd)
     model.eval()
     print(f"  LoRA applied. VRAM: {torch.cuda.memory_allocated() / 1024**3:.1f} GB")
 
