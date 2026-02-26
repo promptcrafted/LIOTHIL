@@ -24,50 +24,75 @@ from dimljus.training.errors import SamplingError
 from dimljus.training.phase import PhaseType
 
 
+def _unwrap_frames(frames: Any) -> list[Any]:
+    """Unwrap diffusers pipeline output to a flat list of frames.
+
+    Diffusers WanPipeline returns frames as list[list[PIL.Image]] or
+    list[list[numpy.ndarray]], where the outer list is the batch.
+    This extracts the first batch item.
+    """
+    if isinstance(frames, (list, tuple)) and len(frames) > 0:
+        if isinstance(frames[0], (list, tuple)):
+            return list(frames[0])
+        return list(frames)
+    return list(frames) if frames is not None else []
+
+
 def _save_frames_to_video(frames: Any, output_path: Path, fps: int = 16) -> None:
     """Save diffusers pipeline output frames to an MP4 file.
 
-    Diffusers WanPipeline returns frames as list[list[PIL.Image]], where
-    the outer list is the batch and the inner list is frames. We take
-    the first batch item and export all frames.
+    Diffusers WanPipeline returns frames as list[list[PIL.Image]] or
+    list[list[numpy.ndarray]]. Handles both formats.
 
     Uses diffusers' built-in export_to_video if available, otherwise
-    falls back to imageio.
+    falls back to saving individual PNG frames.
 
     Args:
-        frames: Pipeline output — list[list[PIL.Image]] or similar.
+        frames: Pipeline output — list[list[PIL.Image or ndarray]].
         output_path: Path to save the .mp4 file.
         fps: Frames per second for the output video.
     """
+    frame_list = _unwrap_frames(frames)
+    if not frame_list:
+        print("  Warning: No frames to save")
+        return
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Try export_to_video (handles both PIL and numpy arrays)
     try:
         from diffusers.utils import export_to_video
-
-        # Diffusers returns list[list[PIL.Image]] — take first batch
-        if isinstance(frames, (list, tuple)) and len(frames) > 0:
-            if isinstance(frames[0], (list, tuple)):
-                frame_list = frames[0]
-            else:
-                frame_list = frames
-        else:
-            frame_list = frames
-
         export_to_video(frame_list, str(output_path), fps=fps)
         print(f"  Sample saved: {output_path}")
+        return
+    except Exception as e:
+        print(f"  Warning: export_to_video failed ({e}), trying fallback...")
 
-    except ImportError:
-        # Fallback: save individual frames as PNG
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        png_dir = output_path.with_suffix("")
-        png_dir.mkdir(parents=True, exist_ok=True)
+    # Fallback: save individual frames as PNG
+    import numpy as np
 
-        if isinstance(frames, (list, tuple)) and len(frames) > 0:
-            frame_list = frames[0] if isinstance(frames[0], (list, tuple)) else frames
-        else:
-            frame_list = frames
+    png_dir = output_path.with_suffix("")
+    png_dir.mkdir(parents=True, exist_ok=True)
 
-        for idx, frame in enumerate(frame_list):
-            frame.save(png_dir / f"frame_{idx:04d}.png")
-        print(f"  Sample frames saved to: {png_dir}")
+    for idx, frame in enumerate(frame_list):
+        png_path = png_dir / f"frame_{idx:04d}.png"
+        try:
+            # PIL Image
+            if hasattr(frame, "save"):
+                frame.save(png_path)
+            # Numpy array
+            elif isinstance(frame, np.ndarray):
+                from PIL import Image
+                # Handle (H, W, C) uint8 arrays
+                if frame.dtype != np.uint8:
+                    frame = (frame * 255).clip(0, 255).astype(np.uint8)
+                Image.fromarray(frame).save(png_path)
+            else:
+                print(f"  Warning: Unknown frame type {type(frame)} at index {idx}")
+        except Exception as e:
+            print(f"  Warning: Failed to save frame {idx}: {e}")
+
+    print(f"  Sample frames saved to: {png_dir} ({len(frame_list)} frames)")
 
 
 class SamplingEngine:
