@@ -7,14 +7,22 @@ training model directly.
 Memory strategy:
     1. Load T5 text encoder temporarily → encode all prompts → free T5
     2. Build diffusers WanPipeline from components:
-       - transformer = the training model (already on GPU with LoRA)
+       - transformer = HIGH-noise expert (runs first, large timesteps)
+       - transformer_2 = LOW-noise expert (runs second, small timesteps)
+       - boundary_ratio = 0.875 for T2V, 0.9 for I2V
        - VAE = loaded from disk (small: ~243MB)
-       - scheduler = FlowMatchEulerDiscreteScheduler (no GPU memory)
+       - scheduler = FlowMatchEulerDiscreteScheduler with shift=3.0
     3. Generate using prompt_embeds (pre-encoded) → skip T5 entirely
     4. Free VAE + pipeline after generation
 
-This keeps peak VRAM usage at training_model + VAE (~0.2GB overhead) rather
-than training_model + full_pipeline (~37GB overhead).
+Dual-expert support:
+    When a partner_model is passed to generate(), the pipeline uses both
+    experts for coherent output. When only the training model is available,
+    falls back to single-expert mode (acceptable for training previews).
+
+    Diffusers convention:
+        transformer   = HIGH-noise expert (handles timesteps >= boundary)
+        transformer_2 = LOW-noise expert  (handles timesteps < boundary)
 
 Supports both individual safetensors files and Diffusers directories.
 
@@ -272,6 +280,8 @@ class WanInferencePipeline:
         guidance_scale: float = 5.0,
         seed: int = 42,
         reference_image: Any = None,
+        partner_model: Any = None,
+        active_expert: str | None = None,
     ) -> Any:
         """Generate a sample video using the training model.
 
@@ -280,6 +290,15 @@ class WanInferencePipeline:
         2. Build a minimal pipeline: training model + VAE + scheduler
         3. Generate using prompt_embeds (no T5 needed during denoising)
         4. Export frames to video and clean up
+
+        Dual-expert support:
+        When partner_model is provided, both experts are used for coherent
+        output. The active_expert parameter tells us which role the training
+        model plays so we can assign transformer/transformer_2 correctly.
+
+        Diffusers convention:
+            transformer   = HIGH-noise expert (large timesteps, runs first)
+            transformer_2 = LOW-noise expert  (small timesteps, runs second)
 
         Args:
             model: The training transformer (already on GPU with LoRA).
@@ -291,6 +310,11 @@ class WanInferencePipeline:
             guidance_scale: Classifier-free guidance scale.
             seed: Random seed for reproducibility.
             reference_image: Reference image for I2V (PIL Image or path).
+            partner_model: Optional second expert transformer for dual-expert
+                inference. If None, uses single-expert mode.
+            active_expert: Which expert the training model is: 'high_noise'
+                or 'low_noise'. Required when partner_model is provided.
+                None = unified phase (training model used as sole transformer).
 
         Returns:
             Generated video frames (list of lists of PIL Images).
@@ -320,12 +344,20 @@ class WanInferencePipeline:
                     self._device, dtype=self._get_torch_dtype()
                 )
 
-            # Step 2: Build minimal pipeline with the training model
-            pipeline = self._build_pipeline(model)
+            # Step 2: Build pipeline — dual-expert if partner available
+            pipeline = self._build_pipeline(
+                model,
+                partner_model=partner_model,
+                active_expert=active_expert,
+            )
 
-            # Step 3: Switch model to eval mode for inference
+            # Step 3: Switch model(s) to eval mode for inference
             was_training = model.training
             model.eval()
+            partner_was_training = False
+            if partner_model is not None:
+                partner_was_training = partner_model.training
+                partner_model.eval()
 
             generator = torch.Generator(device=self._device).manual_seed(seed)
 
@@ -338,6 +370,14 @@ class WanInferencePipeline:
                 "generator": generator,
             }
 
+            # Dual-expert parameters
+            if partner_model is not None:
+                # Wan 2.2 T2V: boundary at 87.5%, I2V: boundary at 90%
+                boundary = 0.9 if self._is_i2v else 0.875
+                kwargs["boundary_ratio"] = boundary
+                # Low-noise expert uses slightly lower CFG (official recommendation)
+                kwargs["guidance_scale_2"] = max(guidance_scale - 1.0, 1.0)
+
             # Add reference image for I2V
             if self._is_i2v and reference_image is not None:
                 kwargs["image"] = reference_image
@@ -348,13 +388,17 @@ class WanInferencePipeline:
             # Restore training mode
             if was_training:
                 model.train()
+            if partner_model is not None and partner_was_training:
+                partner_model.train()
 
             # Extract frames
             frames = output.frames if hasattr(output, "frames") else output
 
             # Clean up pipeline (keeps training model, frees VAE + scheduler)
-            # Don't delete model — it's the training model
+            # Don't delete models — they're the training models
             pipeline.transformer = None
+            if hasattr(pipeline, "transformer_2"):
+                pipeline.transformer_2 = None
             del pipeline
             _clean_gpu_memory()
 
@@ -377,15 +421,29 @@ class WanInferencePipeline:
                 f"This may indicate insufficient VRAM or model incompatibility."
             ) from e
 
-    def _build_pipeline(self, model: Any) -> Any:
+    def _build_pipeline(
+        self,
+        model: Any,
+        partner_model: Any = None,
+        active_expert: str | None = None,
+    ) -> Any:
         """Build a diffusers pipeline using the training model and fresh VAE.
 
         Constructs the pipeline from individual components rather than
         from_pretrained(), so it works with both individual safetensors
         files and Diffusers directories.
 
+        Dual-expert wiring:
+        When partner_model is provided, we assign transformer/transformer_2
+        based on which expert the training model is:
+            - active_expert='high_noise' → model=transformer, partner=transformer_2
+            - active_expert='low_noise'  → partner=transformer, model=transformer_2
+            - active_expert=None (unified) → model=transformer only
+
         Args:
             model: Training transformer (already on GPU).
+            partner_model: Optional second expert for dual-expert mode.
+            active_expert: Role of the training model ('high_noise', 'low_noise', None).
 
         Returns:
             WanPipeline or WanImageToVideoPipeline instance.
@@ -400,24 +458,45 @@ class WanInferencePipeline:
         # ai-toolkit uses flow_shift=3.0, musubi uses shift=3.0
         scheduler = FlowMatchEulerDiscreteScheduler(shift=3.0)
 
+        # Determine expert assignment for the pipeline
+        # Diffusers convention: transformer = HIGH-noise, transformer_2 = LOW-noise
+        if partner_model is not None and active_expert == "high_noise":
+            # Training model is high-noise expert, partner is low-noise
+            transformer_high = model
+            transformer_low = partner_model
+        elif partner_model is not None and active_expert == "low_noise":
+            # Training model is low-noise expert, partner is high-noise
+            transformer_high = partner_model
+            transformer_low = model
+        else:
+            # Single-expert mode (unified phase or no partner available)
+            transformer_high = model
+            transformer_low = None
+
         if self._is_i2v:
             from diffusers import WanImageToVideoPipeline
-            pipeline = WanImageToVideoPipeline(
-                transformer=model,
-                vae=vae,
-                text_encoder=None,
-                tokenizer=None,
-                scheduler=scheduler,
-            )
+            kwargs: dict[str, Any] = {
+                "transformer": transformer_high,
+                "vae": vae,
+                "text_encoder": None,
+                "tokenizer": None,
+                "scheduler": scheduler,
+            }
+            if transformer_low is not None:
+                kwargs["transformer_2"] = transformer_low
+            pipeline = WanImageToVideoPipeline(**kwargs)
         else:
             from diffusers import WanPipeline
-            pipeline = WanPipeline(
-                transformer=model,
-                vae=vae,
-                text_encoder=None,
-                tokenizer=None,
-                scheduler=scheduler,
-            )
+            kwargs = {
+                "transformer": transformer_high,
+                "vae": vae,
+                "text_encoder": None,
+                "tokenizer": None,
+                "scheduler": scheduler,
+            }
+            if transformer_low is not None:
+                kwargs["transformer_2"] = transformer_low
+            pipeline = WanPipeline(**kwargs)
 
         return pipeline
 
