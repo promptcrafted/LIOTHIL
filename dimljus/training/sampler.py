@@ -24,65 +24,87 @@ from dimljus.training.errors import SamplingError
 from dimljus.training.phase import PhaseType
 
 
-def _unwrap_frames(frames: Any) -> list[Any]:
-    """Unwrap diffusers pipeline output to a flat list of frames.
+def _prepare_frames(frames: Any) -> list[Any]:
+    """Normalize diffusers pipeline output into a flat list of (H, W, C) frames.
 
-    Diffusers WanPipeline returns frames as list[list[PIL.Image]] or
-    list[list[numpy.ndarray]], where the outer list is the batch.
-    Numpy arrays may have extra batch dimensions (1, 1, H, W, C) that
-    need squeezing.
+    Diffusers WanPipeline output varies by version and backend:
+      - list[list[PIL.Image]]  — standard with imageio
+      - list[list[ndarray]]    — OpenCV fallback
+      - ndarray (F, H, W, C)  — single video tensor
+      - ndarray (1, F, H, W, C) — batched video tensor
+
+    This normalizes all formats to a list of (H, W, C) arrays or PIL Images.
     """
     import numpy as np
 
-    if isinstance(frames, (list, tuple)) and len(frames) > 0:
-        if isinstance(frames[0], (list, tuple)):
-            frame_list = list(frames[0])
-        else:
-            frame_list = list(frames)
-    elif frames is not None:
-        frame_list = list(frames)
-    else:
+    if frames is None:
         return []
 
-    # Squeeze extra batch dimensions from numpy arrays
-    # WanPipeline can return (1, 1, H, W, C) or (1, H, W, C) arrays
-    squeezed = []
-    for frame in frame_list:
-        if isinstance(frame, np.ndarray):
-            while frame.ndim > 3:
-                frame = frame.squeeze(0)
-            squeezed.append(frame)
+    # Case 1: Single numpy array — a video tensor (F, H, W, C) or (1, F, H, W, C)
+    if isinstance(frames, np.ndarray):
+        # Squeeze leading batch dimensions
+        while frames.ndim > 4:
+            frames = frames[0]
+        # Now (F, H, W, C) — split into list of (H, W, C) frames
+        if frames.ndim == 4:
+            return [frames[i] for i in range(frames.shape[0])]
+        # (H, W, C) single frame
+        if frames.ndim == 3:
+            return [frames]
+        return []
+
+    # Case 2: list[list[...]] — batch of frame lists
+    if isinstance(frames, (list, tuple)) and len(frames) > 0:
+        inner = frames[0]
+        if isinstance(inner, (list, tuple)):
+            # Take first batch item
+            frame_list = list(inner)
+        elif isinstance(inner, np.ndarray) and inner.ndim >= 3:
+            # list of ndarray frames — already flat
+            frame_list = list(frames)
         else:
-            squeezed.append(frame)
-    return squeezed
+            frame_list = list(frames)
+
+        # Squeeze extra dims on individual numpy frames
+        result = []
+        for f in frame_list:
+            if isinstance(f, np.ndarray):
+                while f.ndim > 3:
+                    f = f[0]
+                result.append(f)
+            else:
+                result.append(f)
+        return result
+
+    return []
 
 
 def _save_frames_to_video(frames: Any, output_path: Path, fps: int = 16) -> None:
     """Save diffusers pipeline output frames to an MP4 file.
 
-    Diffusers WanPipeline returns frames as list[list[PIL.Image]] or
-    list[list[numpy.ndarray]]. Handles both formats.
-
-    Uses diffusers' built-in export_to_video if available, otherwise
-    falls back to saving individual PNG frames.
+    Handles all WanPipeline output formats: PIL Images, numpy arrays,
+    and raw video tensors. Uses export_to_video with imageio when
+    available, falls back to PIL PNG saving.
 
     Args:
-        frames: Pipeline output — list[list[PIL.Image or ndarray]].
+        frames: Pipeline output in any supported format.
         output_path: Path to save the .mp4 file.
         fps: Frames per second for the output video.
     """
-    frame_list = _unwrap_frames(frames)
+    frame_list = _prepare_frames(frames)
     if not frame_list:
         print("  Warning: No frames to save")
         return
 
+    print(f"  Prepared {len(frame_list)} frames for saving")
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Try export_to_video (handles both PIL and numpy arrays)
     try:
         from diffusers.utils import export_to_video
         export_to_video(frame_list, str(output_path), fps=fps)
-        print(f"  Sample saved: {output_path}")
+        size_mb = output_path.stat().st_size / 1024 / 1024
+        print(f"  Sample saved: {output_path} ({size_mb:.1f} MB)")
         return
     except Exception as e:
         print(f"  Warning: export_to_video failed ({e}), trying fallback...")
@@ -102,7 +124,6 @@ def _save_frames_to_video(frames: Any, output_path: Path, fps: int = 16) -> None
             # Numpy array
             elif isinstance(frame, np.ndarray):
                 from PIL import Image
-                # Handle (H, W, C) uint8 arrays
                 if frame.dtype != np.uint8:
                     frame = (frame * 255).clip(0, 255).astype(np.uint8)
                 Image.fromarray(frame).save(png_path)
