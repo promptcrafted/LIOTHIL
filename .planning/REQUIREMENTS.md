@@ -36,10 +36,10 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Metrics & Logging
 
-- [ ] **METR-01**: Loss curves logged per training phase (unified, low-noise, high-noise)
-- [ ] **METR-02**: Training wall-clock time logged per test run
-- [ ] **METR-03**: VRAM usage tracked during training
-- [ ] **METR-04**: Per-expert loss divergence tracked (how expert losses separate over epochs)
+- [x] **METR-01**: Loss curves logged per training phase (unified, low-noise, high-noise)
+- [x] **METR-02**: Training wall-clock time logged per test run
+- [x] **METR-03**: VRAM usage tracked during training
+- [x] **METR-04**: Per-expert loss divergence tracked (how expert losses separate over epochs)
 - [ ] **METR-05**: Fixed-seed visual samples generated at regular intervals during training
 - [ ] **METR-06**: Expert weight checksums verified (frozen expert weights don't change during other expert's training)
 
@@ -81,10 +81,10 @@ Deferred to future milestone. Tracked but not in current roadmap.
 | INFER-01 | Phase 1 | Complete |
 | INFER-02 | Phase 1 | Complete |
 | INFER-03 | Phase 1 | Complete |
-| METR-01 | Phase 2 | Pending |
-| METR-02 | Phase 2 | Pending |
-| METR-03 | Phase 2 | Pending |
-| METR-04 | Phase 2 | Pending |
+| METR-01 | Phase 2 | Complete |
+| METR-02 | Phase 2 | Complete |
+| METR-03 | Phase 2 | Complete |
+| METR-04 | Phase 2 | Complete |
 | METR-05 | Phase 2 | Pending |
 | METR-06 | Phase 2 | Pending |
 | TRAIN-01 | Phase 3 | Pending |
@@ -107,4 +107,4 @@ Deferred to future milestone. Tracked but not in current roadmap.
 
 ---
 *Requirements defined: 2026-02-26*
-*Last updated: 2026-02-26 -- Phase mappings updated to match roadmap (metrics moved to Phase 2)*
+*Last updated: 2026-02-27 -- METR-01 through METR-04 completed in Plan 02-01*

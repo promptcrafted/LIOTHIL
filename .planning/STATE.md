@@ -5,33 +5,34 @@
 See: .planning/PROJECT.md (updated 2026-02-26)
 
 **Core value:** The inference pipeline must produce recognizable video -- without working sampling, nothing else in the trainer can be validated.
-**Current focus:** Phase 1: Fix Inference Pipeline — COMPLETE
+**Current focus:** Phase 2: Metrics Infrastructure — Plan 01 COMPLETE
 
 ## Current Position
 
-Phase: 1 of 7 (Fix Inference Pipeline)
-Plan: 2 of 2 in current phase (ALL COMPLETE)
-Status: Phase complete, awaiting verification
-Last activity: 2026-02-27 -- Completed 01-02-PLAN.md (GPU validation + scheduler settings)
+Phase: 2 of 7 (Metrics Infrastructure)
+Plan: 1 of 2 in current phase
+Status: Plan 01 complete, Plan 02 pending
+Last activity: 2026-02-27 -- Completed 02-01-PLAN.md (core metrics infrastructure)
 
-Progress: [##........] 14%
+Progress: [###.......] 21%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 2
-- Average duration: multi-session (plan 02 spanned multiple sessions)
-- Total execution time: ~2 hours cumulative
+- Total plans completed: 3
+- Average duration: varied
+- Total execution time: ~2.2 hours cumulative
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-fix-inference-pipeline | 2 | ~2 hrs | ~1 hr |
+| 02-metrics-infrastructure | 1 | 9 min | 9 min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (4 min), 01-02 (multi-session)
-- Trend: starting
+- Last 5 plans: 01-01 (4 min), 01-02 (multi-session), 02-01 (9 min)
+- Trend: accelerating
 
 *Updated after each plan completion*
 
@@ -50,6 +51,9 @@ Recent decisions affecting current work:
 - FlowMatchEuler shift=5.0 + boundary=0.6 is the T2V inference default (best temporal quality, ComfyUI-aligned)
 - Training boundary (0.875) differs from inference boundary (0.6) — scheduler-dependent SNR mapping
 - Keyframe grid uses frame indices (0,4,8,12,16) for evenly spaced coverage of 17-frame output
+- Used family+variant for W&B run name prefix (wan+22t2v=wan22t2v)
+- VRAM logging skips console output intentionally -- too frequent for terminal
+- Resolved config saved early in run() so config is captured even if training crashes
 
 ### Pending Todos
 
@@ -65,5 +69,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-27
-Stopped at: Completed 01-02-PLAN.md (GPU validation, scheduler comparison)
+Stopped at: Completed 02-01-PLAN.md (core metrics infrastructure)
 Resume file: None
