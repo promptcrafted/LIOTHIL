@@ -215,17 +215,20 @@ class T5TextEncoder:
         "shared.weight", but UMT5EncoderModel keeps a separate
         "encoder.embed_tokens.weight" that should be tied to it.
         Neither load_state_dict(strict=False) nor from_pretrained()
-        performs this tying automatically, leaving embed_tokens as
-        all zeros. This causes the T5 to output zero embeddings,
-        making the model generate unconditionally (ignoring prompts).
+        performs this tying automatically.
+
+        When loaded via load_state_dict (from .pth), embed_tokens is
+        left as all zeros. When loaded via from_pretrained, embed_tokens
+        is randomly initialized. In both cases, the weight is WRONG --
+        it should be identical to shared.weight.
 
         WHY: Without this fix, T5 produces embeddings but ignores
         most of the prompt content -- the model generates coherent
         but hallucinated output that doesn't follow the text.
 
-        Fix: copy the shared.weight tensor to encoder.embed_tokens.
-        Only applied when embed_tokens is all zeros and shared has
-        real weights (safe no-op if weights are already correct).
+        Fix: always copy shared.weight to encoder.embed_tokens if they
+        differ. The shared.weight always has the correct trained values.
+        Safe no-op if weights are already identical.
         """
         if (
             hasattr(model, "shared")
@@ -235,8 +238,9 @@ class T5TextEncoder:
             import torch
             shared = model.shared.weight
             embed = model.encoder.embed_tokens.weight
-            # Only fix if embed_tokens is zeros and shared has real weights
-            if (embed == 0).all() and not (shared == 0).all():
+            # Fix if embed_tokens differs from shared (wrong initialization)
+            # shared.weight always has the correct trained values
+            if not torch.equal(shared, embed):
                 model.encoder.embed_tokens.weight = shared
 
     def encode(self, input_path: str, **kwargs: Any) -> dict[str, Any]:

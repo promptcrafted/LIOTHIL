@@ -1,23 +1,22 @@
-"""Diagnostic inference test — dual expert, proper Wan 2.2 pipeline.
+"""Diagnostic inference test -- dual expert, proper Wan 2.2 pipeline.
 
 Tests:
-  A. Both experts, no LoRA, 30 steps — verify base model generates coherently
-  B. Both experts + LoRA via load_lora_weights() — verify the LoRA loading path
+  A. Both experts, no LoRA, 30 steps -- verify base model generates coherently
+  B. Both experts + LoRA via load_lora_weights() -- verify the LoRA loading path
 
-Diffusers WanPipeline convention:
-  transformer   = HIGH-noise expert (runs first, handles large timesteps)
-  transformer_2 = LOW-noise expert  (runs second, handles small timesteps)
-  boundary_ratio = 0.5 for T2V (50/50 split between experts)
+Approach:
+  Load the full pipeline via WanPipeline.from_pretrained() (which gets the
+  correct scheduler, T5, and config), then swap the transformer weights to
+  our local from_single_file copies. This ensures all pipeline plumbing
+  matches the HF defaults while using our local model files.
 
 KEY FIXES:
   1. (diffusers#12329) Every WanTransformer3DModel.from_single_file() call MUST
      include config= and subfolder= to prevent silent Wan 2.1 misdetection.
-  2. T5 loaded from HF repo (Wan-AI/Wan2.2-T2V-A14B-Diffusers, subfolder
-     text_encoder), NOT from the standalone .pth file — the .pth contains
-     wrong/uninitialized weights (all 243 keys differ from HF, layer_norm=1.0).
-  3. embed_tokens weight tying fix applied after loading — from_pretrained()
-     does not tie shared.weight to encoder.embed_tokens.weight automatically,
-     causing T5 to ignore prompt content.
+  2. T5 loaded from HF repo (Wan-AI/Wan2.2-T2V-A14B-Diffusers), NOT from the
+     standalone .pth file which contains wrong/uninitialized weights.
+  3. Pipeline handles T5 encoding internally -- avoids embed_tokens weight
+     tying issues that occur with separate T5 loading.
 
 Usage:
     HF_TOKEN=hf_xxx python /workspace/dimljus/runpod/test_base_inference.py
@@ -42,20 +41,8 @@ def clean():
     torch.cuda.empty_cache()
 
 
-def encode_prompt(tokenizer, text_encoder, text):
-    tokens = tokenizer(
-        text, max_length=512, padding="max_length",
-        truncation=True, return_tensors="pt"
-    )
-    with torch.no_grad():
-        output = text_encoder(
-            input_ids=tokens.input_ids.to("cuda"),
-            attention_mask=tokens.attention_mask.to("cuda"),
-        )
-    return output.last_hidden_state
-
-
 def inspect_output(frames, label):
+    """Print diagnostic info about pipeline output."""
     print(f"\n  [{label}] Output type: {type(frames)}")
     if isinstance(frames, np.ndarray):
         print(f"  [{label}] Shape: {frames.shape}, dtype: {frames.dtype}")
@@ -64,48 +51,65 @@ def inspect_output(frames, label):
         print(f"  [{label}] List length: {len(frames)}")
         if frames and isinstance(frames[0], (list, tuple)):
             print(f"  [{label}] Inner length: {len(frames[0])}")
-            if frames[0]:
-                elem = frames[0][0]
-                print(f"  [{label}] Element type: {type(elem)}")
-                if hasattr(elem, "size"):
-                    print(f"  [{label}] Element size: {elem.size}")
 
 
-def save_first_frame(frames, path):
-    """Extract and save the first frame as PNG for quick visual check."""
+def extract_pil_frames(frames):
+    """Convert pipeline output to a list of PIL Images."""
+    from PIL import Image
+
+    if isinstance(frames, np.ndarray):
+        arr = frames
+        while arr.ndim > 4:
+            arr = arr[0]
+        if arr.dtype != np.uint8:
+            if arr.max() <= 1.0:
+                arr = (arr * 255).clip(0, 255).astype(np.uint8)
+            else:
+                arr = arr.clip(0, 255).astype(np.uint8)
+        return [Image.fromarray(arr[i]) for i in range(arr.shape[0])]
+    elif isinstance(frames, (list, tuple)) and frames:
+        inner = frames[0]
+        if isinstance(inner, (list, tuple)):
+            return list(inner)
+        elif hasattr(inner, "save"):
+            return list(frames)
+    return None
+
+
+def save_outputs(frames, base_path, label):
+    """Save first frame, keyframe grid, and video from pipeline output."""
+    pil_frames = extract_pil_frames(frames)
+    if not pil_frames:
+        print(f"  [{label}] Could not extract frames")
+        return
+
+    from PIL import Image
+
+    # First frame
+    png_path = base_path.with_suffix(".png")
+    pil_frames[0].save(png_path)
+    print(f"  [{label}] First frame: {png_path} ({png_path.stat().st_size / 1024:.0f} KB)")
+
+    # Keyframe grid (5 evenly spaced frames)
+    n = len(pil_frames)
+    indices = [int(i * (n - 1) / min(4, n - 1)) for i in range(min(5, n))]
+    selected = [pil_frames[i] for i in indices]
+    w, h = selected[0].size
+    grid = Image.new("RGB", (w * len(selected), h))
+    for i, img in enumerate(selected):
+        grid.paste(img, (i * w, 0))
+    grid_path = base_path.with_suffix(".grid.png")
+    grid.save(grid_path)
+    print(f"  [{label}] Grid: {grid_path} ({grid_path.stat().st_size / 1024:.0f} KB)")
+
+    # Video
     try:
-        from PIL import Image
-
-        # Navigate to the first frame
-        frame = None
-        if isinstance(frames, (list, tuple)) and frames:
-            inner = frames[0]
-            if isinstance(inner, (list, tuple)) and inner:
-                frame = inner[0]  # list[list[PIL]] format
-            elif hasattr(inner, "save"):
-                frame = inner  # list[PIL] format
-            elif isinstance(inner, np.ndarray):
-                frame = inner
-        elif isinstance(frames, np.ndarray):
-            while frames.ndim > 3:
-                frames = frames[0]
-            frame = frames
-
-        if frame is None:
-            print(f"  Could not extract first frame")
-            return
-
-        # Convert numpy to PIL if needed
-        if isinstance(frame, np.ndarray):
-            if frame.dtype != np.uint8:
-                frame = (frame * 255).clip(0, 255).astype(np.uint8)
-            frame = Image.fromarray(frame)
-
-        png_path = path.with_suffix(".png")
-        frame.save(png_path)
-        print(f"  First frame saved: {png_path} ({png_path.stat().st_size / 1024:.0f} KB, {frame.size[0]}x{frame.size[1]})")
+        from diffusers.utils import export_to_video
+        mp4_path = base_path.with_suffix(".mp4")
+        export_to_video(pil_frames, str(mp4_path), fps=16)
+        print(f"  [{label}] Video: {mp4_path} ({mp4_path.stat().st_size / 1024:.0f} KB)")
     except Exception as e:
-        print(f"  Warning: Could not save first frame: {e}")
+        print(f"  [{label}] Warning: Could not save video: {e}")
 
 
 def main():
@@ -116,101 +120,80 @@ def main():
     MODEL_HIGH = "/workspace/models/wan2.2_t2v_high_noise_14B_fp16.safetensors"
     MODEL_LOW = "/workspace/models/wan2.2_t2v_low_noise_14B_fp16.safetensors"
     VAE_PATH = "/workspace/models/wan_2.1_vae.safetensors"
-    # T5 loaded from HF repo (correct weights), NOT from .pth file (wrong weights)
-    T5_REPO = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
 
-    # Validated generation settings (from ComfyUI quality path + practitioner advice)
+    # HF repo for from_pretrained pipeline (gets correct T5, scheduler, config)
+    HF_REPO = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+
+    # Generation settings
     HEIGHT = 480
     WIDTH = 832
     NUM_FRAMES = 17
     STEPS = 30
-    BOUNDARY_RATIO = 0.5        # 50/50 split: 15 steps high-noise, 15 steps low-noise
-    GUIDANCE_SCALE = 4.0        # Same CFG for both experts
-    SHIFT = 5.0                 # FlowMatchEulerDiscreteScheduler shift
+    GUIDANCE_SCALE = 4.0
 
-    # ── Load T5 and encode prompts ────────────────────────────────
-    # T5 is loaded from the HF repo (correct weights) instead of the .pth file
-    # which was identified as containing wrong/uninitialized weights.
-    print(f"Loading T5 encoder from {T5_REPO}...")
-    from transformers import AutoTokenizer, UMT5EncoderModel
-    from dimljus.training.wan.inference import WanInferencePipeline
+    # ── Step 1: Load full pipeline from HF ─────────────────────────
+    # The from_pretrained() approach gets the correct T5, scheduler (UniPC),
+    # boundary_ratio (0.875), and text encoding pipeline. We then swap the
+    # transformers to our local from_single_file copies.
+    print(f"Loading pipeline from {HF_REPO}...")
+    from diffusers import WanPipeline
+    from diffusers.models import WanTransformer3DModel, AutoencoderKLWan
 
-    tokenizer = AutoTokenizer.from_pretrained(T5_REPO, subfolder="tokenizer")
-    text_encoder = UMT5EncoderModel.from_pretrained(
-        T5_REPO, subfolder="text_encoder", torch_dtype=torch.bfloat16,
+    pipeline = WanPipeline.from_pretrained(
+        HF_REPO, torch_dtype=torch.bfloat16,
     )
-    # Fix embed_tokens weight tying: from_pretrained() does not tie
-    # shared.weight to encoder.embed_tokens.weight automatically.
-    WanInferencePipeline._fix_t5_embed_tokens(text_encoder)
-    text_encoder = text_encoder.to("cuda")
-    text_encoder.eval()
+    # VAE in float32 for quality (official recommendation)
+    pipeline.vae = pipeline.vae.to(dtype=torch.float32)
 
-    prompt_embeds = encode_prompt(tokenizer, text_encoder, PROMPT)
-    neg_embeds = encode_prompt(tokenizer, text_encoder, NEG)
-    print(f"  Prompt embeds: {prompt_embeds.shape}")
+    print(f"  Pipeline loaded (from_pretrained)")
+    print(f"  Scheduler: {type(pipeline.scheduler).__name__}")
+    if hasattr(pipeline, 'boundary_ratio'):
+        print(f"  boundary_ratio: {pipeline.config.boundary_ratio}")
 
-    del text_encoder, tokenizer
+    # ── Step 2: Swap transformers to local from_single_file copies ──
+    # This proves our local model files produce the same output as the
+    # HF-hosted weights. If output differs, the from_single_file loading
+    # or the model weights themselves are the issue.
+    print("\nSwapping transformers to local from_single_file copies...")
+    # Free the from_pretrained transformers first to save VRAM
+    old_t = pipeline.transformer
+    old_t2 = pipeline.transformer_2
+    del old_t, old_t2
     clean()
-    print(f"  T5 freed. VRAM: {torch.cuda.memory_allocated() / 1024**3:.1f} GB")
 
-    # ── Load BOTH expert models ───────────────────────────────────
-    print("\nLoading both expert models...")
-    from diffusers.models import WanTransformer3DModel
-
-    print("  Loading high-noise expert...")
-    # config= prevents diffusers from guessing wrong model config (diffusers#12329).
-    # Without it, from_single_file auto-detects Wan 2.1 config instead of Wan 2.2
-    # because the transformer weight shapes are identical — silent garbage output.
     model_high = WanTransformer3DModel.from_single_file(
         MODEL_HIGH, torch_dtype=torch.bfloat16,
-        config="Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="transformer",
-    ).to("cuda").eval()
-    print(f"  High loaded. VRAM: {torch.cuda.memory_allocated() / 1024**3:.1f} GB")
-
-    print("  Loading low-noise expert...")
+        config=HF_REPO, subfolder="transformer",
+    )
     model_low = WanTransformer3DModel.from_single_file(
         MODEL_LOW, torch_dtype=torch.bfloat16,
-        config="Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="transformer_2",
-    ).to("cuda").eval()
-    print(f"  Both loaded. VRAM: {torch.cuda.memory_allocated() / 1024**3:.1f} GB")
-
-    # ── Build dual-expert pipeline ────────────────────────────────
-    print("\nBuilding dual-expert pipeline...")
-    from diffusers import WanPipeline, FlowMatchEulerDiscreteScheduler
-    from diffusers.models import AutoencoderKLWan
-
-    # VAE in float32 for better decoding quality (official recommendation)
-    vae = AutoencoderKLWan.from_single_file(
-        VAE_PATH, torch_dtype=torch.float32
-    ).to("cuda")
-
-    scheduler = FlowMatchEulerDiscreteScheduler(shift=SHIFT)
-
-    pipeline = WanPipeline(
-        transformer=model_high,
-        transformer_2=model_low,
-        vae=vae,
-        text_encoder=None,
-        tokenizer=None,
-        scheduler=scheduler,
-        boundary_ratio=BOUNDARY_RATIO,
+        config=HF_REPO, subfolder="transformer_2",
     )
-    print(f"  Pipeline built. VRAM: {torch.cuda.memory_allocated() / 1024**3:.1f} GB")
+    pipeline.transformer = model_high
+    pipeline.transformer_2 = model_low
+
+    # Also swap VAE to our local copy (optional but proves it works)
+    if Path(VAE_PATH).exists():
+        pipeline.vae = AutoencoderKLWan.from_single_file(
+            VAE_PATH, torch_dtype=torch.float32
+        )
+
+    pipeline = pipeline.to("cuda")
+    print(f"  Swapped. VRAM: {torch.cuda.memory_allocated() / 1024**3:.1f} GB")
 
     # ── Test A: Both experts, no LoRA ─────────────────────────────
     print("\n" + "=" * 60)
     print(f"  TEST A: Both experts, no LoRA, {STEPS} steps, {HEIGHT}x{WIDTH}, {NUM_FRAMES} frames")
-    print(f"  boundary_ratio={BOUNDARY_RATIO}, shift={SHIFT}, CFG={GUIDANCE_SCALE}")
+    print(f"  Using pipeline's native prompt encoding (T5 from HF)")
     print("=" * 60)
 
     generator = torch.Generator(device="cuda").manual_seed(42)
     with torch.no_grad():
         output = pipeline(
-            prompt_embeds=prompt_embeds.to("cuda", dtype=torch.bfloat16),
-            negative_prompt_embeds=neg_embeds.to("cuda", dtype=torch.bfloat16),
+            prompt=PROMPT,
+            negative_prompt=NEG,
             num_inference_steps=STEPS,
             guidance_scale=GUIDANCE_SCALE,
-            guidance_scale_2=GUIDANCE_SCALE,
             height=HEIGHT,
             width=WIDTH,
             num_frames=NUM_FRAMES,
@@ -220,11 +203,8 @@ def main():
     frames = output.frames if hasattr(output, "frames") else output
     inspect_output(frames, "DUAL-BASE")
 
-    out_a = Path("/workspace/test_A_dual_base.mp4")
-    save_first_frame(frames, out_a)
-
-    from dimljus.training.sampler import _save_frames_to_video
-    _save_frames_to_video(frames, out_a, fps=16)
+    out_a = Path("/workspace/test_A_dual_base")
+    save_outputs(frames, out_a, "DUAL-BASE")
 
     # ── Test B: LoRA via pipeline.load_lora_weights() ─────────────
     print("\n" + "=" * 60)
@@ -257,11 +237,10 @@ def main():
         generator = torch.Generator(device="cuda").manual_seed(42)
         with torch.no_grad():
             output = pipeline(
-                prompt_embeds=prompt_embeds.to("cuda", dtype=torch.bfloat16),
-                negative_prompt_embeds=neg_embeds.to("cuda", dtype=torch.bfloat16),
+                prompt=PROMPT,
+                negative_prompt=NEG,
                 num_inference_steps=STEPS,
                 guidance_scale=GUIDANCE_SCALE,
-                guidance_scale_2=GUIDANCE_SCALE,
                 height=HEIGHT,
                 width=WIDTH,
                 num_frames=NUM_FRAMES,
@@ -269,42 +248,35 @@ def main():
             )
 
         frames = output.frames if hasattr(output, "frames") else output
-        inspect_output(frames, "LORA-DIFFUSERS")
+        inspect_output(frames, "LORA")
 
-        out_b = Path("/workspace/test_B_lora_diffusers.mp4")
-        save_first_frame(frames, out_b)
-        _save_frames_to_video(frames, out_b, fps=16)
+        out_b = Path("/workspace/test_B_lora_diffusers")
+        save_outputs(frames, out_b, "LORA")
 
         # Unload LoRA for next test
         pipeline.unload_lora_weights()
-        print("  LoRA unloaded for next test")
+        print("  LoRA unloaded")
 
     # ── Summary ──────────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("  SUMMARY")
     print("=" * 60)
-    print("  Check .grid.png files first — quickest way to see if output is coherent.")
+    print("  Check .grid.png files -- quickest way to see if output is coherent.")
     print()
     for label, path_str in [("Dual-Base", "/workspace/test_A_dual_base"),
-                            ("LoRA-Diffusers", "/workspace/test_B_lora_diffusers")]:
+                            ("LoRA", "/workspace/test_B_lora_diffusers")]:
+        grid = Path(f"{path_str}.grid.png")
         mp4 = Path(f"{path_str}.mp4")
         png = Path(f"{path_str}.png")
-        grid = Path(f"{path_str}.grid.png")
         if grid.exists():
             print(f"  {label} GRID: {grid} ({grid.stat().st_size / 1024:.0f} KB)")
         if mp4.exists():
             print(f"  {label} VIDEO: {mp4} ({mp4.stat().st_size / 1024:.0f} KB)")
         if png.exists():
-            print(f"  {label} first frame: {png} ({png.stat().st_size / 1024:.0f} KB)")
-        if not mp4.exists() and not png.exists() and not grid.exists():
-            png_dir = mp4.with_suffix("")
-            if png_dir.exists():
-                pngs = list(png_dir.glob("*.png"))
-                print(f"  {label}: {len(pngs)} PNGs in {png_dir}")
-            else:
-                print(f"  {label}: FAILED or SKIPPED")
+            print(f"  {label} FRAME: {png} ({png.stat().st_size / 1024:.0f} KB)")
+        if not grid.exists() and not mp4.exists() and not png.exists():
+            print(f"  {label}: FAILED or SKIPPED")
 
-    # Cleanup
     clean()
     print("\nDone!")
 
