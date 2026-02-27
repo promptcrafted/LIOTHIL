@@ -369,6 +369,7 @@ class TrainingLogger:
         if self._wandb_run is not None:
             try:
                 import wandb
+                prefixed["global_step"] = global_step
                 wandb.log(prefixed, step=global_step)
             except Exception as e:
                 if not self._wandb_log_warned:
@@ -399,6 +400,7 @@ class TrainingLogger:
         if self._wandb_run is not None:
             try:
                 import wandb
+                metrics["global_step"] = global_step
                 wandb.log(metrics, step=global_step)
             except Exception as e:
                 if not self._wandb_log_warned:
@@ -524,6 +526,7 @@ class TrainingLogger:
                     )
 
             if log_dict:
+                log_dict["global_step"] = global_step
                 wandb.log(log_dict, step=global_step)
 
         except Exception as e:
