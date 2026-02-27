@@ -1,7 +1,7 @@
-# Requirements: Dimljus — Inference Fix & Training Validation
+# Requirements: Dimljus -- Inference Fix & Training Validation
 
 **Defined:** 2026-02-26
-**Core Value:** The inference pipeline must produce recognizable video — without working sampling, nothing else in the trainer can be validated.
+**Core Value:** The inference pipeline must produce recognizable video -- without working sampling, nothing else in the trainer can be validated.
 
 ## v1 Requirements
 
@@ -26,13 +26,13 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 - [ ] **BASE-01**: Low-noise-only LoRA used as starting base for subsequent differential training (instead of unified)
 - [ ] **BASE-02**: Merged (low+high) checkpoint used as starting base for subsequent differential training (check if ai-toolkit has a pre-merged model available)
-- [ ] **BASE-03**: Compare output quality: unified base vs low-noise base vs merged base — determine which produces the best downstream results
+- [ ] **BASE-03**: Compare output quality: unified base vs low-noise base vs merged base -- determine which produces the best downstream results
 
 ### Production Training
 
 - [ ] **PROD-01**: Real training run completes using best base strategy with expert freezing
 - [ ] **PROD-02**: Real training produces a LoRA that visibly modifies inference output toward training subject
-- [ ] **PROD-03**: MoE theory test — compare differential training output against uniform baseline to assess whether per-expert hyperparams are worth pursuing
+- [ ] **PROD-03**: MoE theory test -- compare differential training output against uniform baseline to assess whether per-expert hyperparams are worth pursuing
 
 ### Metrics & Logging
 
@@ -81,21 +81,21 @@ Deferred to future milestone. Tracked but not in current roadmap.
 | INFER-01 | Phase 1 | Pending |
 | INFER-02 | Phase 1 | Pending |
 | INFER-03 | Phase 1 | Pending |
-| TRAIN-01 | Phase 2 | Pending |
-| TRAIN-02 | Phase 2 | Pending |
-| TRAIN-03 | Phase 3 | Pending |
-| TRAIN-04 | Phase 3 | Pending |
-| TRAIN-05 | Phase 3 | Pending |
-| TRAIN-06 | Phase 4 | Pending |
-| BASE-01 | Phase 5 | Pending |
-| BASE-02 | Phase 5 | Pending |
-| BASE-03 | Phase 5 | Pending |
-| METR-01 | Phase 6 | Pending |
-| METR-02 | Phase 6 | Pending |
-| METR-03 | Phase 6 | Pending |
-| METR-04 | Phase 6 | Pending |
-| METR-05 | Phase 6 | Pending |
-| METR-06 | Phase 6 | Pending |
+| METR-01 | Phase 2 | Pending |
+| METR-02 | Phase 2 | Pending |
+| METR-03 | Phase 2 | Pending |
+| METR-04 | Phase 2 | Pending |
+| METR-05 | Phase 2 | Pending |
+| METR-06 | Phase 2 | Pending |
+| TRAIN-01 | Phase 3 | Pending |
+| TRAIN-02 | Phase 3 | Pending |
+| TRAIN-03 | Phase 4 | Pending |
+| TRAIN-04 | Phase 4 | Pending |
+| TRAIN-05 | Phase 4 | Pending |
+| TRAIN-06 | Phase 5 | Pending |
+| BASE-01 | Phase 6 | Pending |
+| BASE-02 | Phase 6 | Pending |
+| BASE-03 | Phase 6 | Pending |
 | PROD-01 | Phase 7 | Pending |
 | PROD-02 | Phase 7 | Pending |
 | PROD-03 | Phase 7 | Pending |
@@ -103,8 +103,8 @@ Deferred to future milestone. Tracked but not in current roadmap.
 **Coverage:**
 - v1 requirements: 21 total
 - Mapped to phases: 21
-- Unmapped: 0 ✓
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-26*
-*Last updated: 2026-02-26 after adding base strategy comparison (BASE-01/02/03)*
+*Last updated: 2026-02-26 -- Phase mappings updated to match roadmap (metrics moved to Phase 2)*
