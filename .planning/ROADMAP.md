@@ -30,11 +30,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. Running base model inference (no LoRA) produces a coherent video matching the text prompt -- not noise, not a grid, not a static frame
   2. Running inference with a trained LoRA produces output that is visually different from base model output in a way that corresponds to the training data
   3. The same inference code produces identical results whether called from a standalone test script or triggered by the training pipeline's sample generation
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 01-01: TBD
-- [ ] 01-02: TBD
+- [ ] 01-01-PLAN.md -- Fix from_single_file() config bug in all code paths + add keyframe grid output
+- [ ] 01-02-PLAN.md -- GPU validation of base model and LoRA inference on RunPod
 
 ### Phase 2: Metrics Infrastructure
 **Goal**: Every training run automatically logs the data needed to compare experiments
