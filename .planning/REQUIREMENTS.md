@@ -40,8 +40,8 @@ Requirements for this milestone. Each maps to roadmap phases.
 - [x] **METR-02**: Training wall-clock time logged per test run
 - [x] **METR-03**: VRAM usage tracked during training
 - [x] **METR-04**: Per-expert loss divergence tracked (how expert losses separate over epochs)
-- [ ] **METR-05**: Fixed-seed visual samples generated at regular intervals during training
-- [ ] **METR-06**: Expert weight checksums verified (frozen expert weights don't change during other expert's training)
+- [x] **METR-05**: Fixed-seed visual samples generated at regular intervals during training
+- [x] **METR-06**: Expert weight checksums verified (frozen expert weights don't change during other expert's training)
 
 ## v2 Requirements
 
@@ -85,8 +85,8 @@ Deferred to future milestone. Tracked but not in current roadmap.
 | METR-02 | Phase 2 | Complete |
 | METR-03 | Phase 2 | Complete |
 | METR-04 | Phase 2 | Complete |
-| METR-05 | Phase 2 | Pending |
-| METR-06 | Phase 2 | Pending |
+| METR-05 | Phase 2 | Complete |
+| METR-06 | Phase 2 | Complete |
 | TRAIN-01 | Phase 3 | Pending |
 | TRAIN-02 | Phase 3 | Pending |
 | TRAIN-03 | Phase 4 | Pending |
