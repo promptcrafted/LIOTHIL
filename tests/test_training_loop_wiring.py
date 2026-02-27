@@ -92,6 +92,9 @@ class MockLoggingConfig:
     wandb_project = None
     wandb_entity = None
     wandb_run_name = None
+    wandb_group = None
+    wandb_tags = []
+    vram_sample_every_n_steps = 50
 
 
 class MockSamplingConfig:

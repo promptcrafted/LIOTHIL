@@ -33,9 +33,10 @@ from dimljus.training.errors import (
     DimljusTrainingError,
     ModelBackendError,
 )
-from dimljus.training.logger import TrainingLogger
+from dimljus.training.logger import TrainingLogger, generate_run_name, save_resolved_config
 from dimljus.training.lora import LoRAState, merge_experts
-from dimljus.training.metrics import MetricsTracker
+from dimljus.training.metrics import MetricsTracker, RunTimer
+from dimljus.training.vram import VRAMTracker
 from dimljus.training.optimizer import build_optimizer, build_scheduler, compute_total_steps
 from dimljus.training.phase import PhaseType, TrainingPhase, resolve_phases
 from dimljus.training.sampler import SamplingEngine
@@ -88,15 +89,39 @@ class TrainingOrchestrator:
             name=config.save.name,
             max_checkpoints=config.save.max_checkpoints,
         )
+
+        # Auto-generate a descriptive run name if the user didn't specify one.
+        # The name encodes model, dataset, training mode, rank, and LR so
+        # runs are distinguishable at a glance in W&B.
+        run_name = config.logging.wandb_run_name
+        if run_name is None and "wandb" in config.logging.backends:
+            run_name = generate_run_name(config)
+
+        # Build the resolved config dict once — used for both W&B config
+        # tab and YAML disk save
+        resolved_config_dict: dict | None = None
+        if hasattr(config, "model_dump"):
+            resolved_config_dict = config.model_dump()
+
         self._logger = TrainingLogger(
             backends=config.logging.backends,
             output_dir=config.save.output_dir,
             wandb_project=config.logging.wandb_project,
             wandb_entity=config.logging.wandb_entity,
-            wandb_run_name=config.logging.wandb_run_name,
+            wandb_run_name=run_name,
             log_every_n_steps=config.logging.log_every_n_steps,
+            wandb_group=getattr(config.logging, "wandb_group", None),
+            wandb_tags=getattr(config.logging, "wandb_tags", None),
+            resolved_config=resolved_config_dict,
         )
         self._metrics = MetricsTracker()
+
+        # VRAM tracker — samples GPU memory at configurable intervals
+        vram_interval = getattr(config.logging, "vram_sample_every_n_steps", 50)
+        self._vram_tracker = VRAMTracker(sample_every_n_steps=vram_interval)
+
+        # Wall-clock timer — records per-phase and total training time
+        self._timer = RunTimer()
         self._sampler = SamplingEngine(
             enabled=config.sampling.enabled,
             every_n_epochs=config.sampling.every_n_epochs,
@@ -142,8 +167,21 @@ class TrainingOrchestrator:
         if dry_run:
             return
 
+        # Start wall-clock timer for the entire training run
+        self._timer.start_run()
+
         # Ensure output directories exist
         self._checkpoint_mgr.ensure_dirs()
+
+        # Save the fully resolved config to disk as YAML for reproducibility.
+        # This happens early so the config is captured even if training crashes.
+        try:
+            save_resolved_config(
+                self._config,
+                Path(self._config.save.output_dir),
+            )
+        except Exception as e:
+            print(f"  Warning: Failed to save resolved config ({e}).")
 
         # Check for resumption
         resume_point = self._checkpoint_mgr.find_resume_point(self._phases)
@@ -198,6 +236,21 @@ class TrainingOrchestrator:
         # Save final merged LoRA
         self._save_final()
 
+        # Log end-of-run summary with timing, loss, and VRAM data.
+        # Collects final loss EMA from each tracked phase for the summary.
+        phase_losses: dict[str, float] = {}
+        for pt in self._metrics.tracked_phases:
+            phase_metrics = self._metrics.get_phase(pt)
+            if phase_metrics is not None and phase_metrics.step_count > 0:
+                phase_losses[pt.value] = phase_metrics.loss_ema
+
+        self._logger.log_run_summary(
+            total_time=self._timer.total_elapsed(),
+            phase_times=self._timer.phase_times,
+            peak_vram_gb=self._vram_tracker.peak(),
+            phase_losses=phase_losses,
+        )
+
         # Cleanup inference pipeline if loaded (free VRAM)
         if self._pipeline is not None and hasattr(self._pipeline, "cleanup"):
             self._pipeline.cleanup()
@@ -233,6 +286,7 @@ class TrainingOrchestrator:
         """
         self._logger.log_phase_start(phase, phase_index)
         self._metrics.start_phase(phase.phase_type)
+        self._timer.start_phase(phase.phase_type.value)
 
         # Get the active LoRA state for this phase (may be None for first phase)
         active_lora = self._get_active_lora(phase)
@@ -284,6 +338,9 @@ class TrainingOrchestrator:
         # GPU teardown: extract LoRA weights, remove PEFT wrapper
         if dataset is not None:
             active_lora = self._teardown_phase_lora(phase, active_lora)
+
+        # Record phase wall-clock time
+        phase_elapsed = self._timer.end_phase(phase.phase_type.value)
 
         self._logger.log_phase_end(phase, phase_index)
 
@@ -645,6 +702,12 @@ class TrainingOrchestrator:
                     global_step=self._global_step,
                     phase_type=phase.phase_type,
                 )
+
+            # Sample VRAM at configured interval (post-optimizer-step
+            # to capture steady-state working memory, not transient peaks)
+            vram_metrics = self._vram_tracker.sample(self._global_step)
+            if vram_metrics is not None:
+                self._logger.log_vram(vram_metrics, self._global_step)
 
         # Flush remaining accumulated gradients
         if accum_count > 0:

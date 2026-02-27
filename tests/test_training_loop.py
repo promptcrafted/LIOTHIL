@@ -63,6 +63,9 @@ class MockLoggingConfig:
     wandb_project = None
     wandb_entity = None
     wandb_run_name = None
+    wandb_group = None
+    wandb_tags = []
+    vram_sample_every_n_steps = 50
 
 class MockSamplingConfig:
     enabled = False
@@ -87,6 +90,8 @@ class MockScheduler:
     min_lr_ratio = 0.01
 
 class MockLora:
+    rank = 16
+    alpha = 16
     dropout = 0.0
 
 class MockExpertOverrides:
@@ -130,6 +135,7 @@ class MockTrainingConfig:
 class MockModelConfig:
     boundary_ratio = 0.875
     flow_shift = 3.0
+    variant = "2.2_t2v"
 
 class MockConfig:
     def __init__(self, tmp_path, **kwargs):
@@ -146,6 +152,10 @@ class MockConfig:
         sampling = MockSamplingConfig()
         sampling.sample_dir = str(tmp_path / "samples")
         self.sampling = sampling
+
+    def model_dump(self):
+        """Mimic Pydantic model_dump() for config save testing."""
+        return {"model": {"variant": "2.2_t2v"}, "test": True}
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +227,53 @@ class TestTrainingRun:
         orch.run(dataset=None)
         state_path = tmp_path / "output" / "training_state.json"
         assert state_path.is_file()
+
+
+class TestMetricsInfrastructure:
+    """Verify orchestrator creates VRAMTracker, RunTimer, and related infra."""
+
+    def test_has_vram_tracker(self, tmp_path):
+        """Orchestrator creates a VRAMTracker instance."""
+        from dimljus.training.vram import VRAMTracker
+        config = MockConfig(tmp_path)
+        orch = TrainingOrchestrator(config, MockModelBackend())
+        assert hasattr(orch, "_vram_tracker")
+        assert isinstance(orch._vram_tracker, VRAMTracker)
+
+    def test_has_run_timer(self, tmp_path):
+        """Orchestrator creates a RunTimer instance."""
+        from dimljus.training.metrics import RunTimer
+        config = MockConfig(tmp_path)
+        orch = TrainingOrchestrator(config, MockModelBackend())
+        assert hasattr(orch, "_timer")
+        assert isinstance(orch._timer, RunTimer)
+
+    def test_run_summary_called(self, tmp_path, capsys):
+        """run() prints a training complete summary at the end."""
+        config = MockConfig(tmp_path, moe=MockMoeConfig(fork_enabled=False))
+        config.training.unified_epochs = 1
+        config.save.save_every_n_epochs = 1
+        orch = TrainingOrchestrator(config, MockModelBackend())
+        orch.run(dataset=None)
+        output = capsys.readouterr().out
+        assert "TRAINING COMPLETE" in output
+
+    def test_resolved_config_saved(self, tmp_path):
+        """run() saves resolved_config.yaml to the output directory."""
+        config = MockConfig(tmp_path, moe=MockMoeConfig(fork_enabled=False))
+        config.training.unified_epochs = 1
+        config.save.save_every_n_epochs = 1
+        orch = TrainingOrchestrator(config, MockModelBackend())
+        orch.run(dataset=None)
+        config_path = tmp_path / "output" / "resolved_config.yaml"
+        assert config_path.is_file()
+
+    def test_vram_tracker_interval_from_config(self, tmp_path):
+        """VRAMTracker uses the interval from config.logging."""
+        config = MockConfig(tmp_path)
+        config.logging.vram_sample_every_n_steps = 100
+        orch = TrainingOrchestrator(config, MockModelBackend())
+        assert orch._vram_tracker._sample_interval == 100
 
 
 class TestPhaseTransitions:

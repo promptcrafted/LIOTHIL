@@ -2,7 +2,7 @@
 
 import pytest
 
-from dimljus.training.logger import TrainingLogger
+from dimljus.training.logger import TrainingLogger, generate_run_name, save_resolved_config
 from dimljus.training.phase import PhaseType, TrainingPhase
 
 
@@ -20,6 +20,50 @@ def _make_phase(**kwargs):
     defaults.update(kwargs)
     return TrainingPhase(**defaults)
 
+
+# ---------------------------------------------------------------------------
+# Mock config objects for generate_run_name
+# ---------------------------------------------------------------------------
+
+class _MockModel:
+    def __init__(self, variant="2.2_t2v", family="wan"):
+        self.variant = variant
+        self.family = family
+
+class _MockSave:
+    def __init__(self, name="test_lora"):
+        self.name = name
+
+class _MockLora:
+    def __init__(self, rank=16):
+        self.rank = rank
+
+class _MockOptimizer:
+    def __init__(self, learning_rate=5e-5):
+        self.learning_rate = learning_rate
+
+class _MockTraining:
+    def __init__(self, unified_epochs=10):
+        self.unified_epochs = unified_epochs
+
+class _MockMoe:
+    def __init__(self, enabled=True, fork_enabled=True):
+        self.enabled = enabled
+        self.fork_enabled = fork_enabled
+
+class _MockConfig:
+    def __init__(self, **kwargs):
+        self.model = kwargs.get("model", _MockModel())
+        self.save = kwargs.get("save", _MockSave())
+        self.lora = kwargs.get("lora", _MockLora())
+        self.optimizer = kwargs.get("optimizer", _MockOptimizer())
+        self.training = kwargs.get("training", _MockTraining())
+        self.moe = kwargs.get("moe", _MockMoe())
+
+
+# ---------------------------------------------------------------------------
+# Tests: TrainingLogger basics (console backend)
+# ---------------------------------------------------------------------------
 
 class TestTrainingLogger:
     """Console logger basics."""
@@ -118,3 +162,190 @@ class TestTrainingLogger:
         logger.print_training_plan(phases)
         output = capsys.readouterr().out
         assert "0.875" in output
+
+
+# ---------------------------------------------------------------------------
+# Tests: generate_run_name
+# ---------------------------------------------------------------------------
+
+class TestGenerateRunName:
+    """Auto-descriptive W&B run naming from config."""
+
+    def test_fork_mode(self):
+        """MoE enabled + fork enabled + unified_epochs > 0 = fork mode."""
+        config = _MockConfig(
+            model=_MockModel(variant="2.2_t2v"),
+            save=_MockSave(name="holly"),
+            moe=_MockMoe(enabled=True, fork_enabled=True),
+            training=_MockTraining(unified_epochs=10),
+            lora=_MockLora(rank=16),
+            optimizer=_MockOptimizer(learning_rate=1e-4),
+        )
+        name = generate_run_name(config)
+        assert name == "wan22t2v-holly-fork-r16-lr1e-04"
+
+    def test_unified_mode(self):
+        """MoE disabled = unified mode."""
+        config = _MockConfig(
+            model=_MockModel(variant="2.2_t2v"),
+            save=_MockSave(name="annika"),
+            moe=_MockMoe(enabled=False, fork_enabled=False),
+            lora=_MockLora(rank=16),
+            optimizer=_MockOptimizer(learning_rate=5e-5),
+        )
+        name = generate_run_name(config)
+        assert name == "wan22t2v-annika-unified-r16-lr5e-05"
+
+    def test_expert_mode(self):
+        """MoE enabled + fork enabled + unified_epochs == 0 = expert mode."""
+        config = _MockConfig(
+            model=_MockModel(variant="2.2_t2v"),
+            save=_MockSave(name="test"),
+            moe=_MockMoe(enabled=True, fork_enabled=True),
+            training=_MockTraining(unified_epochs=0),
+            lora=_MockLora(rank=24),
+            optimizer=_MockOptimizer(learning_rate=8e-5),
+        )
+        name = generate_run_name(config)
+        assert name == "wan22t2v-test-expert-r24-lr8e-05"
+
+    def test_default_name_replaced(self):
+        """'dimljus_lora' in save name is replaced with 'default'."""
+        config = _MockConfig(
+            save=_MockSave(name="dimljus_lora"),
+        )
+        name = generate_run_name(config)
+        assert "default" in name
+        assert "dimljus_lora" not in name
+
+    def test_variant_dots_removed(self):
+        """Dots in variant are removed for compact naming."""
+        config = _MockConfig(
+            model=_MockModel(variant="2.2_i2v"),
+        )
+        name = generate_run_name(config)
+        assert name.startswith("wan22i2v-")
+
+
+# ---------------------------------------------------------------------------
+# Tests: log_vram
+# ---------------------------------------------------------------------------
+
+class TestLogVram:
+    """VRAM metric logging."""
+
+    def test_log_vram_console_only_no_crash(self, capsys):
+        """log_vram() with console-only backend does not crash."""
+        logger = TrainingLogger(backends=["console"])
+        metrics = {"system/vram_allocated_gb": 4.5, "system/vram_reserved_gb": 6.0}
+        logger.log_vram(metrics, global_step=50)
+        # Console is intentionally skipped for VRAM, so no output
+        output = capsys.readouterr().out
+        assert output == ""
+
+    def test_log_vram_no_wandb_no_crash(self):
+        """log_vram() does not crash when W&B is not initialized."""
+        logger = TrainingLogger(backends=["console"])
+        assert logger._wandb_run is None
+        logger.log_vram({"system/vram_allocated_gb": 4.0}, global_step=100)
+
+
+# ---------------------------------------------------------------------------
+# Tests: log_run_summary
+# ---------------------------------------------------------------------------
+
+class TestLogRunSummary:
+    """End-of-run console summary."""
+
+    def test_summary_includes_timing(self, capsys):
+        """Summary shows total time and per-phase times."""
+        logger = TrainingLogger(backends=["console"])
+        logger.log_run_summary(
+            total_time=120.0,
+            phase_times={"unified": 60.0, "high_noise": 60.0},
+            peak_vram_gb=12.5,
+            phase_losses={"unified": 0.0123, "high_noise": 0.0089},
+        )
+        output = capsys.readouterr().out
+        assert "TRAINING COMPLETE" in output
+        assert "2.0 min" in output  # 120s = 2.0 min
+        assert "unified" in output
+        assert "high_noise" in output
+
+    def test_summary_includes_loss(self, capsys):
+        """Summary shows final EMA loss per phase."""
+        logger = TrainingLogger(backends=["console"])
+        logger.log_run_summary(
+            total_time=60.0,
+            phase_times={},
+            peak_vram_gb=0.0,
+            phase_losses={"unified": 0.012345},
+        )
+        output = capsys.readouterr().out
+        assert "0.012345" in output
+
+    def test_summary_includes_vram(self, capsys):
+        """Summary shows peak VRAM when > 0."""
+        logger = TrainingLogger(backends=["console"])
+        logger.log_run_summary(
+            total_time=60.0,
+            phase_times={},
+            peak_vram_gb=14.3,
+            phase_losses={},
+        )
+        output = capsys.readouterr().out
+        assert "14.30" in output
+
+    def test_summary_no_vram_when_zero(self, capsys):
+        """Summary skips VRAM line when peak is 0 (CPU-only)."""
+        logger = TrainingLogger(backends=["console"])
+        logger.log_run_summary(
+            total_time=60.0,
+            phase_times={},
+            peak_vram_gb=0.0,
+            phase_losses={},
+        )
+        output = capsys.readouterr().out
+        assert "Peak VRAM" not in output
+
+
+# ---------------------------------------------------------------------------
+# Tests: save_resolved_config
+# ---------------------------------------------------------------------------
+
+class TestSaveResolvedConfig:
+    """Resolved config YAML save to disk."""
+
+    def test_saves_yaml_file(self, tmp_path):
+        """save_resolved_config creates a YAML file in the output dir."""
+        class FakeConfig:
+            def model_dump(self):
+                return {"model": {"variant": "2.2_t2v"}, "lora": {"rank": 16}}
+
+        path = save_resolved_config(FakeConfig(), tmp_path)
+        assert path.exists()
+        assert path.name == "resolved_config.yaml"
+
+    def test_yaml_contents(self, tmp_path):
+        """Saved YAML contains the config dict."""
+        import yaml
+
+        class FakeConfig:
+            def model_dump(self):
+                return {"model": {"variant": "2.2_t2v"}}
+
+        path = save_resolved_config(FakeConfig(), tmp_path)
+        with open(path) as f:
+            data = yaml.safe_load(f)
+        assert data["model"]["variant"] == "2.2_t2v"
+
+    def test_creates_parent_dirs(self, tmp_path):
+        """save_resolved_config creates parent directories if needed."""
+        deep_dir = tmp_path / "a" / "b" / "c"
+
+        class FakeConfig:
+            def model_dump(self):
+                return {"key": "value"}
+
+        path = save_resolved_config(FakeConfig(), deep_dir)
+        assert path.exists()
