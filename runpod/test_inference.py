@@ -46,8 +46,12 @@ def main() -> None:
     print("Step 1: Loading base model...")
     t0 = time.time()
     from diffusers.models import WanTransformer3DModel
+    # config= prevents diffusers from guessing wrong model config (diffusers#12329).
+    # Without it, from_single_file auto-detects Wan 2.1 config instead of Wan 2.2
+    # because the transformer weight shapes are identical — silent garbage output.
     model = WanTransformer3DModel.from_single_file(
-        args.dit, torch_dtype=torch.bfloat16
+        args.dit, torch_dtype=torch.bfloat16,
+        config="Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="transformer",
     )
     model = model.to("cuda")
     model.eval()
