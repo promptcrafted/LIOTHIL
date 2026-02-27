@@ -415,11 +415,17 @@ class SamplingEngine:
         epoch: int,
         base_dir: str | Path | None = None,
         reference_image: Any = None,
+        partner_model: Any = None,
+        active_expert: str | None = None,
     ) -> list[Path]:
         """Generate sample videos for all prompts.
 
         Iterates through prompts, generates one sample per prompt,
         and saves them to the output directory.
+
+        For expert phases, pass partner_model and active_expert to enable
+        dual-expert inference — the trained expert uses its live LoRA while
+        the partner expert runs with its own LoRA (or base weights).
 
         Args:
             pipeline: InferencePipeline implementation.
@@ -429,6 +435,10 @@ class SamplingEngine:
             epoch: Current epoch number.
             base_dir: Override base directory for output.
             reference_image: Optional reference image for I2V.
+            partner_model: The other expert's transformer for dual-expert
+                inference. None = single-expert mode.
+            active_expert: Which expert the training model is ('high_noise'
+                or 'low_noise'). Required when partner_model is provided.
 
         Returns:
             List of paths to generated sample files.
@@ -450,6 +460,8 @@ class SamplingEngine:
                     guidance_scale=self._guidance_scale,
                     seed=seed,
                     reference_image=reference_image,
+                    partner_model=partner_model,
+                    active_expert=active_expert,
                 )
                 # If result is a path, use it; otherwise save frames to video
                 if isinstance(result, (str, Path)):
