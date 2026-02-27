@@ -1,9 +1,12 @@
 """Tests for dimljus.training.wan.checkpoint_io — LoRA format conversion.
 
-Covers three public functions:
-    dimljus_to_musubi(state_dict)   — PEFT/diffusers → musubi/kohya key format
-    musubi_to_dimljus(state_dict)   — musubi/kohya → PEFT/diffusers key format
-    validate_state_dict_keys(...)   — structural validation of dimljus-format keys
+Covers public functions:
+    dimljus_to_musubi(state_dict)    — PEFT/diffusers → musubi/kohya key format
+    musubi_to_dimljus(state_dict)    — musubi/kohya → PEFT/diffusers key format
+    validate_state_dict_keys(...)    — structural validation of dimljus-format keys
+    add_diffusers_prefix(...)        — add transformer. prefix for diffusers loading
+    strip_diffusers_prefix(...)      — remove transformer. prefix for training use
+    has_diffusers_prefix(...)        — detect whether keys have component prefixes
 
 All tests are GPU-free. Tensor values are represented by simple numpy arrays
 or plain Python objects — the conversion functions never touch values, only keys.
@@ -15,8 +18,11 @@ import numpy as np
 import pytest
 
 from dimljus.training.wan.checkpoint_io import (
+    add_diffusers_prefix,
     dimljus_to_musubi,
+    has_diffusers_prefix,
     musubi_to_dimljus,
+    strip_diffusers_prefix,
     validate_state_dict_keys,
 )
 
@@ -368,3 +374,86 @@ class TestValidateStateDictKeys:
         }
         issues = validate_state_dict_keys(sd, variant="2.2_t2v")
         assert len(issues) >= 3  # bad format, out-of-range, missing B
+
+
+# ---------------------------------------------------------------------------
+# add_diffusers_prefix / strip_diffusers_prefix / has_diffusers_prefix
+# ---------------------------------------------------------------------------
+
+class TestDiffusersPrefix:
+    """Diffusers component prefix operations for pipeline.load_lora_weights()."""
+
+    def test_add_prefix_default(self):
+        """Default prefix is 'transformer' (high-noise expert)."""
+        sd = {"blocks.0.attn1.to_q.lora_A.weight": object()}
+        result = add_diffusers_prefix(sd)
+        assert "transformer.blocks.0.attn1.to_q.lora_A.weight" in result
+
+    def test_add_prefix_transformer_2(self):
+        """Low-noise expert gets 'transformer_2' prefix."""
+        sd = {"blocks.0.attn1.to_q.lora_A.weight": object()}
+        result = add_diffusers_prefix(sd, prefix="transformer_2")
+        assert "transformer_2.blocks.0.attn1.to_q.lora_A.weight" in result
+
+    def test_add_prefix_preserves_values(self):
+        """Tensor values are the same objects after prefixing."""
+        val = object()
+        sd = {"blocks.0.attn1.to_q.lora_A.weight": val}
+        result = add_diffusers_prefix(sd)
+        assert result["transformer.blocks.0.attn1.to_q.lora_A.weight"] is val
+
+    def test_strip_prefix_transformer(self):
+        """Strips 'transformer.' prefix back to clean keys."""
+        sd = {"transformer.blocks.0.attn1.to_q.lora_A.weight": object()}
+        result = strip_diffusers_prefix(sd)
+        assert "blocks.0.attn1.to_q.lora_A.weight" in result
+
+    def test_strip_prefix_transformer_2(self):
+        """Strips 'transformer_2.' prefix back to clean keys."""
+        sd = {"transformer_2.blocks.0.attn1.to_q.lora_A.weight": object()}
+        result = strip_diffusers_prefix(sd)
+        assert "blocks.0.attn1.to_q.lora_A.weight" in result
+
+    def test_strip_prefix_mixed(self):
+        """Mixed keys with both prefixes are correctly stripped."""
+        sd = {
+            "transformer.blocks.0.attn1.to_q.lora_A.weight": object(),
+            "transformer_2.blocks.0.attn1.to_q.lora_A.weight": object(),
+        }
+        result = strip_diffusers_prefix(sd)
+        assert len(result) == 1  # Both map to same clean key
+        assert "blocks.0.attn1.to_q.lora_A.weight" in result
+
+    def test_strip_prefix_passthrough(self):
+        """Keys without a known prefix are passed through unchanged."""
+        sd = {"blocks.0.attn1.to_q.lora_A.weight": object()}
+        result = strip_diffusers_prefix(sd)
+        assert "blocks.0.attn1.to_q.lora_A.weight" in result
+
+    def test_roundtrip_add_strip(self):
+        """add → strip produces original keys."""
+        sd = _make_state_dict(blocks=(0, 5), targets=("attn1.to_q", "ffn.net.2"))
+        prefixed = add_diffusers_prefix(sd, prefix="transformer")
+        restored = strip_diffusers_prefix(prefixed)
+        assert set(restored.keys()) == set(sd.keys())
+
+    def test_has_diffusers_prefix_true(self):
+        """Detects transformer. prefix."""
+        sd = {"transformer.blocks.0.attn1.to_q.lora_A.weight": object()}
+        assert has_diffusers_prefix(sd) is True
+
+    def test_has_diffusers_prefix_false(self):
+        """Clean keys have no prefix."""
+        sd = {"blocks.0.attn1.to_q.lora_A.weight": object()}
+        assert has_diffusers_prefix(sd) is False
+
+    def test_has_diffusers_prefix_transformer_2(self):
+        """Detects transformer_2. prefix."""
+        sd = {"transformer_2.blocks.0.attn1.to_q.lora_A.weight": object()}
+        assert has_diffusers_prefix(sd) is True
+
+    def test_empty_state_dict(self):
+        """Empty state dicts are handled gracefully by all functions."""
+        assert add_diffusers_prefix({}) == {}
+        assert strip_diffusers_prefix({}) == {}
+        assert has_diffusers_prefix({}) is False

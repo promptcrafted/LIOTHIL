@@ -9,9 +9,9 @@ Memory strategy:
     2. Build diffusers WanPipeline from components:
        - transformer = HIGH-noise expert (runs first, large timesteps)
        - transformer_2 = LOW-noise expert (runs second, small timesteps)
-       - boundary_ratio = 0.875 for T2V, 0.9 for I2V
-       - VAE = loaded from disk (small: ~243MB)
-       - scheduler = FlowMatchEulerDiscreteScheduler with shift=3.0
+       - boundary_ratio = 0.5 for T2V, 0.9 for I2V
+       - VAE = loaded from disk (small: ~243MB), always float32
+       - scheduler = FlowMatchEulerDiscreteScheduler with shift=5.0
     3. Generate using prompt_embeds (pre-encoded) → skip T5 entirely
     4. Free VAE + pipeline after generation
 
@@ -50,11 +50,24 @@ def _clean_gpu_memory() -> None:
 
 
 class WanInferencePipeline:
-    """InferencePipeline for Wan model sample generation during training.
+    """InferencePipeline for Wan model sample generation.
 
-    Uses the training model directly (no second copy). Loads T5 and VAE
-    temporarily for encoding/decoding, freeing them afterward to minimize
-    VRAM usage.
+    Two usage modes:
+
+    1. Training preview mode (model already has LoRA applied via PEFT):
+       Pass the training model directly — LoRA is already injected.
+
+    2. Standalone inference mode (load LoRA from file):
+       Set lora_path to a saved checkpoint. The pipeline loads the LoRA
+       via pipeline.load_lora_weights() after building the diffusers pipeline.
+       The checkpoint must have diffusers-compatible keys (transformer.blocks.0...).
+
+    Memory strategy:
+        - Load T5 temporarily → encode all prompts → free T5
+        - Build diffusers WanPipeline from components
+        - Load LoRA from file if lora_path is set
+        - Generate using prompt_embeds → skip T5 during denoising
+        - Free VAE + pipeline after generation
 
     Supports two model loading modes:
         - Individual safetensors: provide vae_path and t5_path
@@ -68,6 +81,10 @@ class WanInferencePipeline:
         is_i2v: Whether this is an I2V pipeline.
         dtype: Tensor dtype for inference ('bf16', 'fp16', 'fp32').
         device: Target device ('cuda', 'cpu').
+        lora_path: Path to a saved LoRA checkpoint (.safetensors).
+            If set, the LoRA is loaded via pipeline.load_lora_weights()
+            after building the pipeline. The file must have diffusers-
+            compatible keys (with transformer./transformer_2. prefix).
     """
 
     def __init__(
@@ -78,6 +95,7 @@ class WanInferencePipeline:
         is_i2v: bool = False,
         dtype: str = "bf16",
         device: str = "cuda",
+        lora_path: str | None = None,
     ) -> None:
         self._vae_path = vae_path
         self._t5_path = t5_path
@@ -85,6 +103,7 @@ class WanInferencePipeline:
         self._is_i2v = is_i2v
         self._dtype_str = dtype
         self._device = device
+        self._lora_path = lora_path
 
         # Cached prompt embeddings (populated on first generate call)
         self._cached_prompt_embeds: dict[str, Any] = {}
@@ -205,6 +224,8 @@ class WanInferencePipeline:
             text_encoder = UMT5EncoderModel.from_pretrained(
                 self._diffusers_path, subfolder="text_encoder"
             )
+            # Fix embed_tokens weight tying (same bug affects from_pretrained)
+            self._fix_t5_embed_tokens(text_encoder)
             return tokenizer, text_encoder
         else:
             raise SamplingError(
@@ -225,11 +246,20 @@ class WanInferencePipeline:
         import torch
         from transformers import AutoTokenizer, UMT5EncoderModel, UMT5Config
 
-        # Load tokenizer from HuggingFace (small download, cached)
-        tokenizer = AutoTokenizer.from_pretrained("google/umt5-xxl")
-
-        # Build empty model from config, then load weights
-        config = UMT5Config.from_pretrained("google/umt5-xxl")
+        # Load tokenizer and config from HuggingFace cache (pre-cached during setup).
+        # local_files_only=True prevents network access — if not cached, falls back
+        # to downloading (only happens if setup.sh cache step was skipped).
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(
+                "google/umt5-xxl", local_files_only=True
+            )
+            config = UMT5Config.from_pretrained(
+                "google/umt5-xxl", local_files_only=True
+            )
+        except OSError:
+            # Not cached locally — fall back to download (first run without setup.sh)
+            tokenizer = AutoTokenizer.from_pretrained("google/umt5-xxl")
+            config = UMT5Config.from_pretrained("google/umt5-xxl")
         text_encoder = UMT5EncoderModel(config)
 
         path = Path(t5_path)
@@ -240,10 +270,49 @@ class WanInferencePipeline:
             state_dict = load_file(str(path))
 
         text_encoder.load_state_dict(state_dict, strict=False)
+
+        # Fix T5 embed_tokens weight tying: the Wan-AI checkpoint stores the
+        # token embedding as "shared.weight" but UMT5EncoderModel expects it
+        # at "encoder.embed_tokens.weight". The weight tying doesn't happen
+        # automatically during load_state_dict, leaving embed_tokens as zeros.
+        # Without this fix, the T5 produces all-zero embeddings and the model
+        # generates unconditionally (ignoring the prompt entirely).
+        self._fix_t5_embed_tokens(text_encoder)
+
         return tokenizer, text_encoder
+
+    @staticmethod
+    def _fix_t5_embed_tokens(text_encoder: Any) -> None:
+        """Fix T5 embed_tokens weight tying bug.
+
+        The Wan-AI T5 checkpoint stores the token embedding as
+        "shared.weight", but UMT5EncoderModel keeps a separate
+        "encoder.embed_tokens.weight" that should be tied to it.
+        Neither load_state_dict(strict=False) nor from_pretrained()
+        performs this tying automatically, leaving embed_tokens as
+        all zeros. This causes the T5 to output zero embeddings,
+        making the model generate unconditionally (ignoring prompts).
+
+        Fix: copy the shared.weight tensor to encoder.embed_tokens.
+        """
+        if (
+            hasattr(text_encoder, "shared")
+            and hasattr(text_encoder, "encoder")
+            and hasattr(text_encoder.encoder, "embed_tokens")
+        ):
+            import torch
+            shared = text_encoder.shared.weight
+            embed = text_encoder.encoder.embed_tokens.weight
+            # Only fix if embed_tokens is zeros and shared has real weights
+            if (embed == 0).all() and not (shared == 0).all():
+                text_encoder.encoder.embed_tokens.weight = shared
 
     def _load_vae(self) -> Any:
         """Load the Wan VAE for decoding latents to video frames.
+
+        Always loads in float32 regardless of training precision — the Wan VAE
+        produces artifacts and gridded noise patterns when run in bf16/fp16.
+        This matches the official recommendation and our validated inference.
 
         Returns:
             AutoencoderKLWan instance.
@@ -251,15 +320,13 @@ class WanInferencePipeline:
         import torch
         from diffusers.models import AutoencoderKLWan
 
-        dtype = self._get_torch_dtype()
-
         if self._vae_path and Path(self._vae_path).exists():
             vae = AutoencoderKLWan.from_single_file(
-                self._vae_path, torch_dtype=dtype
+                self._vae_path, torch_dtype=torch.float32
             )
         elif self._diffusers_path:
             vae = AutoencoderKLWan.from_pretrained(
-                self._diffusers_path, subfolder="vae", torch_dtype=dtype
+                self._diffusers_path, subfolder="vae", torch_dtype=torch.float32
             )
         else:
             raise SamplingError(
@@ -277,7 +344,7 @@ class WanInferencePipeline:
         prompt: str,
         negative_prompt: str = "",
         num_inference_steps: int = 30,
-        guidance_scale: float = 5.0,
+        guidance_scale: float = 4.0,
         seed: int = 42,
         reference_image: Any = None,
         partner_model: Any = None,
@@ -351,6 +418,10 @@ class WanInferencePipeline:
                 active_expert=active_expert,
             )
 
+            # Step 2b: Load LoRA from file if configured (standalone inference)
+            if self._lora_path is not None:
+                self._apply_lora_from_file(pipeline, self._lora_path)
+
             # Step 3: Switch model(s) to eval mode for inference
             was_training = model.training
             model.eval()
@@ -362,21 +433,23 @@ class WanInferencePipeline:
             generator = torch.Generator(device=self._device).manual_seed(seed)
 
             # Build generation kwargs
+            # Explicit height/width/num_frames avoid diffusers defaults (81 frames)
+            # which would OOM during training. 17 frames is the minimum Wan supports.
             kwargs: dict[str, Any] = {
                 "prompt_embeds": prompt_embeds,
                 "negative_prompt_embeds": neg_embeds,
                 "num_inference_steps": num_inference_steps,
                 "guidance_scale": guidance_scale,
+                "height": 480,
+                "width": 832,
+                "num_frames": 17,
                 "generator": generator,
             }
 
             # Dual-expert parameters
             if partner_model is not None:
-                # Wan 2.2 T2V: boundary at 87.5%, I2V: boundary at 90%
-                boundary = 0.9 if self._is_i2v else 0.875
-                kwargs["boundary_ratio"] = boundary
-                # Low-noise expert uses slightly lower CFG (official recommendation)
-                kwargs["guidance_scale_2"] = max(guidance_scale - 1.0, 1.0)
+                # Official recommendation: 4.0 high-noise, 3.0 low-noise
+                kwargs["guidance_scale_2"] = 3.0
 
             # Add reference image for I2V
             if self._is_i2v and reference_image is not None:
@@ -421,6 +494,61 @@ class WanInferencePipeline:
                 f"This may indicate insufficient VRAM or model incompatibility."
             ) from e
 
+    def _apply_lora_from_file(self, pipeline: Any, lora_path: str) -> None:
+        """Load a LoRA checkpoint and apply it to the pipeline.
+
+        The LoRA file must have diffusers-compatible keys with component
+        prefixes (transformer.blocks.0... and/or transformer_2.blocks.0...).
+        Files saved by dimljus with diffusers_prefix are directly compatible.
+
+        If the file has clean keys (no prefix), they are auto-prefixed with
+        'transformer.' so they apply to the first/only transformer.
+
+        Args:
+            pipeline: Built WanPipeline or WanImageToVideoPipeline.
+            lora_path: Path to the .safetensors LoRA file.
+
+        Raises:
+            SamplingError: If the LoRA file cannot be loaded.
+        """
+        from pathlib import Path
+
+        lora_file = Path(lora_path)
+        if not lora_file.is_file():
+            raise SamplingError(
+                f"LoRA file not found: {lora_path}\n"
+                f"Check that the path is correct."
+            )
+
+        try:
+            from safetensors.torch import load_file
+
+            state_dict = load_file(str(lora_file))
+
+            # Auto-detect prefix: if keys don't have 'transformer.' prefix,
+            # add it so load_lora_weights() routes them correctly.
+            has_prefix = any(
+                k.startswith("transformer.") or k.startswith("transformer_2.")
+                for k in state_dict
+            )
+            if not has_prefix:
+                # Clean keys → add transformer. prefix for the primary model
+                state_dict = {
+                    f"transformer.{k}": v for k, v in state_dict.items()
+                }
+
+            print(f"  Loading LoRA: {lora_file.name} ({len(state_dict)} keys)")
+            pipeline.load_lora_weights(state_dict, adapter_name="dimljus")
+            print(f"  LoRA applied successfully")
+
+        except SamplingError:
+            raise
+        except Exception as e:
+            raise SamplingError(
+                f"Failed to load LoRA from '{lora_path}': {e}\n"
+                f"Ensure the file is a valid safetensors LoRA checkpoint."
+            ) from e
+
     def _build_pipeline(
         self,
         model: Any,
@@ -453,10 +581,9 @@ class WanInferencePipeline:
         # Load VAE (small: ~243MB)
         vae = self._load_vae()
 
-        # Create scheduler with flow_shift=3.0 for Wan models
-        # Without shift, the noise schedule is wrong and produces garbage output.
-        # ai-toolkit uses flow_shift=3.0, musubi uses shift=3.0
-        scheduler = FlowMatchEulerDiscreteScheduler(shift=3.0)
+        # Create scheduler with flow_shift=5.0 for Wan models.
+        # Validated against ComfyUI quality path (shift=5.0, euler sampler).
+        scheduler = FlowMatchEulerDiscreteScheduler(shift=5.0)
 
         # Determine expert assignment for the pipeline
         # Diffusers convention: transformer = HIGH-noise, transformer_2 = LOW-noise
@@ -473,6 +600,10 @@ class WanInferencePipeline:
             transformer_high = model
             transformer_low = None
 
+        # Boundary ratio: 0.5 for T2V (50/50 split between experts),
+        # 0.9 for I2V.
+        boundary = 0.9 if self._is_i2v else 0.5
+
         if self._is_i2v:
             from diffusers import WanImageToVideoPipeline
             kwargs: dict[str, Any] = {
@@ -484,6 +615,7 @@ class WanInferencePipeline:
             }
             if transformer_low is not None:
                 kwargs["transformer_2"] = transformer_low
+                kwargs["boundary_ratio"] = boundary
             pipeline = WanImageToVideoPipeline(**kwargs)
         else:
             from diffusers import WanPipeline
@@ -496,6 +628,7 @@ class WanInferencePipeline:
             }
             if transformer_low is not None:
                 kwargs["transformer_2"] = transformer_low
+                kwargs["boundary_ratio"] = boundary
             pipeline = WanPipeline(**kwargs)
 
         return pipeline

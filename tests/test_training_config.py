@@ -923,7 +923,7 @@ class TestSamplingConfig:
         assert SamplingConfig().sample_steps == T2V_SAMPLING_STEPS == 30
 
     def test_default_guidance_scale(self):
-        assert SamplingConfig().guidance_scale == T2V_SAMPLING_GUIDANCE == 5.0
+        assert SamplingConfig().guidance_scale == T2V_SAMPLING_GUIDANCE == 4.0
 
     def test_default_sample_dir_none(self):
         assert SamplingConfig().sample_dir is None

@@ -867,6 +867,11 @@ class TrainingOrchestrator:
         (not from the LoRAState, which may be stale or empty). This
         ensures checkpoints always contain the actual trained weights.
 
+        Saves with diffusers component prefix so the file is directly
+        loadable by pipeline.load_lora_weights():
+            - UNIFIED/HIGH_NOISE → 'transformer.' prefix
+            - LOW_NOISE → 'transformer_2.' prefix
+
         Args:
             phase: Current training phase.
             epoch: Current epoch number.
@@ -895,6 +900,14 @@ class TrainingOrchestrator:
             metadata=lora.metadata,
         )
 
+        # Determine diffusers prefix based on phase type.
+        # Unified and high-noise both target 'transformer' (the first/only model).
+        # Low-noise targets 'transformer_2' (the second model in dual-expert).
+        if phase.phase_type == PhaseType.LOW_NOISE:
+            diffusers_prefix = "transformer_2"
+        else:
+            diffusers_prefix = "transformer"
+
         path = self._checkpoint_mgr.checkpoint_path(phase.phase_type, epoch)
         checkpoint_lora.save(
             path,
@@ -902,6 +915,7 @@ class TrainingOrchestrator:
                 "epoch": str(epoch),
                 "global_step": str(self._global_step),
             },
+            diffusers_prefix=diffusers_prefix,
         )
         self._logger.log_checkpoint_saved(path, phase.phase_type, epoch)
 
@@ -999,9 +1013,13 @@ class TrainingOrchestrator:
         """Save the final merged LoRA for inference.
 
         For MoE models: merge high-noise and low-noise experts.
-        For single-expert: save the unified LoRA as-is.
+        For single-expert: save the unified LoRA with diffusers prefix.
+
+        All final LoRAs are saved with diffusers component prefixes so
+        they can be loaded directly via pipeline.load_lora_weights().
         """
         # If both experts exist, merge them
+        # merge_experts() already adds transformer./transformer_2. prefixes
         if self._high_noise_lora is not None and self._low_noise_lora is not None:
             try:
                 merged = merge_experts(self._high_noise_lora, self._low_noise_lora)
@@ -1013,6 +1031,9 @@ class TrainingOrchestrator:
                     f"{self._checkpoint_mgr._output_dir}"
                 )
 
-        # If only unified exists, save it as final
+        # If only unified exists, save with transformer prefix for diffusers
         elif self._unified_lora is not None:
-            self._unified_lora.save(self._checkpoint_mgr.final_path())
+            self._unified_lora.save(
+                self._checkpoint_mgr.final_path(),
+                diffusers_prefix="transformer",
+            )

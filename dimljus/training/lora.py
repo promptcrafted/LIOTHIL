@@ -84,12 +84,24 @@ class LoRAState:
         )
         return copy_1, copy_2
 
-    def save(self, path: str | Path, extra_metadata: dict[str, str] | None = None) -> Path:
+    def save(
+        self,
+        path: str | Path,
+        extra_metadata: dict[str, str] | None = None,
+        diffusers_prefix: str | None = None,
+    ) -> Path:
         """Save LoRA weights to a safetensors file.
+
+        Optionally adds a diffusers component prefix to all keys, making
+        the file directly loadable by pipeline.load_lora_weights().
 
         Args:
             path: Output file path (should end in .safetensors).
             extra_metadata: Additional metadata to include in the file header.
+            diffusers_prefix: If set, prepend this prefix to all keys
+                (e.g. 'transformer' or 'transformer_2'). The saved file
+                will be directly loadable by diffusers inference pipelines.
+                None = save with clean internal keys (for training use).
 
         Returns:
             The resolved Path where the file was saved.
@@ -106,14 +118,23 @@ class LoRAState:
             "alpha": str(self.alpha),
             "phase_type": self.phase_type.value,
         }
+        if diffusers_prefix:
+            meta["diffusers_prefix"] = diffusers_prefix
         meta.update(self.metadata)
         if extra_metadata:
             meta.update(extra_metadata)
 
+        # Optionally prefix keys for diffusers compatibility
+        save_dict = self.state_dict
+        if diffusers_prefix and save_dict:
+            save_dict = {
+                f"{diffusers_prefix}.{k}": v for k, v in save_dict.items()
+            }
+
         # Detect whether state_dict contains numpy or torch tensors
         has_numpy = any(
-            isinstance(v, np.ndarray) for v in self.state_dict.values()
-        ) if self.state_dict else False
+            isinstance(v, np.ndarray) for v in save_dict.values()
+        ) if save_dict else False
 
         # Try the matching backend first, then fall back
         try:
@@ -131,7 +152,7 @@ class LoRAState:
             )
 
         try:
-            save_fn(self.state_dict, str(path), metadata=meta)
+            save_fn(save_dict, str(path), metadata=meta)
         except LoRAError:
             raise
         except Exception as e:
@@ -142,14 +163,21 @@ class LoRAState:
         return path
 
     @staticmethod
-    def load(path: str | Path) -> LoRAState:
+    def load(path: str | Path, strip_prefix: bool = True) -> LoRAState:
         """Load LoRA weights from a safetensors file.
 
         Reads the state dict and metadata. Extracts rank, alpha, and
         phase_type from metadata if present.
 
+        Auto-detects diffusers component prefixes (transformer., transformer_2.)
+        and strips them by default so the state dict is in clean internal
+        format for training use. Pass strip_prefix=False to keep original keys.
+
         Args:
             path: Path to the .safetensors file.
+            strip_prefix: If True (default), strip diffusers component prefixes
+                from keys. Set False to keep original keys (e.g. for passing
+                directly to pipeline.load_lora_weights()).
 
         Returns:
             LoRAState with loaded weights and metadata.
@@ -189,6 +217,23 @@ class LoRAState:
                 f"The file may be corrupted. Try re-downloading or re-saving."
             ) from e
 
+        # Auto-detect and strip diffusers prefixes for training use
+        if strip_prefix and state_dict:
+            _KNOWN_PREFIXES = ("transformer_2.", "transformer.")
+            needs_strip = any(
+                key.startswith(pfx) for key in state_dict for pfx in _KNOWN_PREFIXES
+            )
+            if needs_strip:
+                stripped: dict[str, Any] = {}
+                for key, value in state_dict.items():
+                    clean_key = key
+                    for pfx in _KNOWN_PREFIXES:
+                        if key.startswith(pfx):
+                            clean_key = key[len(pfx):]
+                            break
+                    stripped[clean_key] = value
+                state_dict = stripped
+
         # Extract structured metadata
         rank = int(metadata.get("rank", "0"))
         alpha = int(metadata.get("alpha", str(rank)))
@@ -201,7 +246,7 @@ class LoRAState:
         # Remove structured keys from extra metadata
         extra_meta = {
             k: v for k, v in metadata.items()
-            if k not in ("rank", "alpha", "phase_type")
+            if k not in ("rank", "alpha", "phase_type", "diffusers_prefix")
         }
 
         return LoRAState(
@@ -263,12 +308,12 @@ def merge_experts(
     high_noise: LoRAState,
     low_noise: LoRAState,
 ) -> LoRAState:
-    """Merge two expert LoRAs into one for inference.
+    """Merge two expert LoRAs into one file for diffusers inference.
 
-    Combines both state dicts by prefixing keys with the expert name.
-    This is the format expected by inference pipelines that support
-    differential LoRA — they route parameters to the right expert
-    based on the prefix.
+    Uses diffusers component prefixes so the merged file is directly
+    loadable via pipeline.load_lora_weights():
+        - transformer.blocks.0...   → HIGH-noise expert
+        - transformer_2.blocks.0... → LOW-noise expert
 
     If both experts have the same keys (common for fork-and-specialize),
     the merged dict contains both under different prefixes.
@@ -278,7 +323,8 @@ def merge_experts(
         low_noise: Low-noise expert LoRA state.
 
     Returns:
-        Merged LoRAState with combined weights.
+        Merged LoRAState with combined weights, directly loadable by
+        diffusers WanPipeline.load_lora_weights().
 
     Raises:
         LoRAError: If the experts have incompatible rank/alpha.
@@ -296,15 +342,21 @@ def merge_experts(
             f"Both experts must use the same alpha."
         )
 
+    # Diffusers convention:
+    #   transformer   = HIGH-noise expert
+    #   transformer_2 = LOW-noise expert
+    TRANSFORMER = "transformer"
+    TRANSFORMER_2 = "transformer_2"
+
     merged: dict[str, Any] = {}
 
-    # Add high-noise weights with prefix
+    # Add high-noise weights with diffusers prefix
     for key, tensor in high_noise.state_dict.items():
-        merged[f"high_noise.{key}"] = tensor
+        merged[f"{TRANSFORMER}.{key}"] = tensor
 
-    # Add low-noise weights with prefix
+    # Add low-noise weights with diffusers prefix
     for key, tensor in low_noise.state_dict.items():
-        merged[f"low_noise.{key}"] = tensor
+        merged[f"{TRANSFORMER_2}.{key}"] = tensor
 
     return LoRAState(
         state_dict=merged,

@@ -9,29 +9,32 @@ Diffusers WanPipeline convention:
   transformer_2 = LOW-noise expert  (runs second, handles small timesteps)
   boundary_ratio = 0.5 for T2V (50/50 split between experts)
 
-KEY FIX (diffusers#12329):
-  Every WanTransformer3DModel.from_single_file() call MUST include:
-    config="Wan-AI/Wan2.2-T2V-A14B-Diffusers"
-    subfolder="transformer" (high-noise) or "transformer_2" (low-noise)
-  Without this, diffusers silently loads Wan 2.1 config instead of 2.2,
-  producing noise/garbage output despite identical weight shapes.
-
-ESCALATION PLAN (if base inference still produces noise after config= fix):
-  Step 1: [DONE] Add config= to from_single_file() — this IS the model loading fix
-  Step 2: Try from_pretrained with full HF repo "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
-          instead of from_single_file as an A/B test. If from_pretrained works but
-          from_single_file doesn't, the bug is in config detection.
-  Step 3: Build a minimal stock diffusers reference pipeline (pure diffusers, no
-          dimljus code at all) as ground truth. If stock diffusers also fails,
-          the issue is in the model weights or diffusers version.
+KEY FIXES:
+  1. (diffusers#12329) Every WanTransformer3DModel.from_single_file() call MUST
+     include config= and subfolder= to prevent silent Wan 2.1 misdetection.
+  2. T5 loaded from HF repo (Wan-AI/Wan2.2-T2V-A14B-Diffusers, subfolder
+     text_encoder), NOT from the standalone .pth file — the .pth contains
+     wrong/uninitialized weights (all 243 keys differ from HF, layer_norm=1.0).
+  3. embed_tokens weight tying fix applied after loading — from_pretrained()
+     does not tie shared.weight to encoder.embed_tokens.weight automatically,
+     causing T5 to ignore prompt content.
 
 Usage:
-    python /workspace/dimljus/runpod/test_base_inference.py
+    HF_TOKEN=hf_xxx python /workspace/dimljus/runpod/test_base_inference.py
 """
 import torch
 import gc
+import os
 import numpy as np
 from pathlib import Path
+
+# Ensure HF token is available for gated repos.
+# Set HF_TOKEN in your environment (RunPod pod settings or export HF_TOKEN=...).
+if not os.environ.get("HF_TOKEN"):
+    print("WARNING: HF_TOKEN not set. Downloads from gated repos may fail.")
+    print("  Fix: export HF_TOKEN=hf_your_token_here")
+# Use workspace cache to avoid filling root partition
+os.environ.setdefault("HF_HOME", "/workspace/.cache/huggingface")
 
 
 def clean():
@@ -113,7 +116,8 @@ def main():
     MODEL_HIGH = "/workspace/models/wan2.2_t2v_high_noise_14B_fp16.safetensors"
     MODEL_LOW = "/workspace/models/wan2.2_t2v_low_noise_14B_fp16.safetensors"
     VAE_PATH = "/workspace/models/wan_2.1_vae.safetensors"
-    T5_PATH = "/workspace/models/models_t5_umt5-xxl-enc-bf16.pth"
+    # T5 loaded from HF repo (correct weights), NOT from .pth file (wrong weights)
+    T5_REPO = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
 
     # Validated generation settings (from ComfyUI quality path + practitioner advice)
     HEIGHT = 480
@@ -125,19 +129,20 @@ def main():
     SHIFT = 5.0                 # FlowMatchEulerDiscreteScheduler shift
 
     # ── Load T5 and encode prompts ────────────────────────────────
-    print("Loading T5 encoder...")
-    from transformers import AutoTokenizer, UMT5EncoderModel, UMT5Config
+    # T5 is loaded from the HF repo (correct weights) instead of the .pth file
+    # which was identified as containing wrong/uninitialized weights.
+    print(f"Loading T5 encoder from {T5_REPO}...")
+    from transformers import AutoTokenizer, UMT5EncoderModel
     from dimljus.training.wan.inference import WanInferencePipeline
 
-    tokenizer = AutoTokenizer.from_pretrained("google/umt5-xxl")
-    config = UMT5Config.from_pretrained("google/umt5-xxl")
-    text_encoder = UMT5EncoderModel(config)
-    t5_sd = torch.load(T5_PATH, map_location="cpu", weights_only=True)
-    text_encoder.load_state_dict(t5_sd, strict=False)
-    del t5_sd
-    # Fix T5 embed_tokens weight tying
+    tokenizer = AutoTokenizer.from_pretrained(T5_REPO, subfolder="tokenizer")
+    text_encoder = UMT5EncoderModel.from_pretrained(
+        T5_REPO, subfolder="text_encoder", torch_dtype=torch.bfloat16,
+    )
+    # Fix embed_tokens weight tying: from_pretrained() does not tie
+    # shared.weight to encoder.embed_tokens.weight automatically.
     WanInferencePipeline._fix_t5_embed_tokens(text_encoder)
-    text_encoder = text_encoder.to("cuda", dtype=torch.bfloat16)
+    text_encoder = text_encoder.to("cuda")
     text_encoder.eval()
 
     prompt_embeds = encode_prompt(tokenizer, text_encoder, PROMPT)

@@ -171,11 +171,13 @@ T2V_NUM_LAYERS: int = 40
 """Number of transformer blocks. All Wan models use 40."""
 
 T2V_BOUNDARY_RATIO: float = 0.875
-"""SNR boundary for expert routing. Timesteps with noise ratio above this
-threshold use the high-noise expert; below it, the low-noise expert.
-0.875 = 875/1000 of the noise schedule."""
+"""SNR boundary for expert routing during training. Timesteps >= this value
+train the high-noise expert; timesteps below train the low-noise expert.
+0.875 matches the official Wan 2.2 inference config and is used by every
+community trainer (musubi, ai-toolkit, diffusion-pipe, DiffSynth-Studio).
+Override via moe.boundary_ratio in your training config to experiment."""
 
-T2V_FLOW_SHIFT: float = 3.0
+T2V_FLOW_SHIFT: float = 5.0
 """Flow shift parameter. Controls the noise schedule curve — higher values
 mean more noise early in the denoising process.
 
@@ -459,8 +461,8 @@ T2V_SAMPLING_STEPS: int = 30
 """Denoising steps for sample generation. 30 is a good balance between
 quality and speed for progress monitoring."""
 
-T2V_SAMPLING_GUIDANCE: float = 5.0
-"""Guidance scale for sample generation. 5.0 is the Wan default for
+T2V_SAMPLING_GUIDANCE: float = 4.0
+"""Guidance scale for sample generation. 4.0 is the validated default for
 balanced text adherence without over-saturation."""
 
 T2V_SAMPLING_DIR: str | None = None
@@ -490,8 +492,8 @@ I2V_IN_CHANNELS: int = 36
 The reference image is channel-concatenated with the noisy latents."""
 
 I2V_BOUNDARY_RATIO: float = 0.900
-"""SNR boundary for I2V expert routing. Slightly higher than T2V (0.875)
-because the reference image gives the low-noise expert more to work with."""
+"""SNR boundary for I2V expert routing. Matches official Wan 2.2 I2V config.
+Override via moe.boundary_ratio to experiment."""
 
 
 # ─── Wan 2.2 I2V: Unified Foundation (differences from T2V) ───

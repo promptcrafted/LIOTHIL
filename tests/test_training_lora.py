@@ -103,6 +103,26 @@ class TestSaveLoad:
         assert loaded.phase_type == PhaseType.HIGH_NOISE
         assert len(loaded.state_dict) == 4
 
+    def test_save_with_diffusers_prefix(self, tmp_path):
+        """Saving with prefix adds transformer. to keys; loading strips it."""
+        state = LoRAState(
+            state_dict=_make_state_dict(),
+            rank=16, alpha=16, phase_type=PhaseType.HIGH_NOISE,
+        )
+        path = tmp_path / "prefixed_lora.safetensors"
+        state.save(path, diffusers_prefix="transformer")
+
+        # Load with strip_prefix=True (default) → clean keys
+        loaded = LoRAState.load(path)
+        for key in loaded.state_dict:
+            assert not key.startswith("transformer.")
+            assert key.startswith("blocks.")
+
+        # Load with strip_prefix=False → keeps prefixed keys
+        loaded_raw = LoRAState.load(path, strip_prefix=False)
+        for key in loaded_raw.state_dict:
+            assert key.startswith("transformer.")
+
     def test_save_creates_parent_dirs(self, tmp_path):
         state = LoRAState(
             state_dict=_make_state_dict(),
@@ -143,9 +163,10 @@ class TestMergeExperts:
             rank=16, alpha=16, phase_type=PhaseType.LOW_NOISE,
         )
         merged = merge_experts(high, low)
-        # Keys should be prefixed
+        # Keys should have diffusers component prefixes:
+        # transformer. = high-noise, transformer_2. = low-noise
         for key in merged.state_dict:
-            assert key.startswith("high_noise.") or key.startswith("low_noise.")
+            assert key.startswith("transformer.") or key.startswith("transformer_2.")
 
     def test_merge_key_count(self):
         high = LoRAState(

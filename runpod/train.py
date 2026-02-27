@@ -33,6 +33,11 @@ import sys
 import time
 from pathlib import Path
 
+# Reduce CUDA memory fragmentation for large models (14B+ params).
+# Without this, gradient checkpointing recompute can OOM on 81-frame samples
+# even with 95GB VRAM due to reserved-but-unallocated memory blocks.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 
 # =============================================================================
 # Validation

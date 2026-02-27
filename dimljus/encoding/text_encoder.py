@@ -148,9 +148,17 @@ class T5TextEncoder:
                 # Newer transformers don't allow state_dict + model name together,
                 # and AutoConfig can't resolve umt5-xxl on some versions.
                 from transformers import UMT5Config
-                t5_config = UMT5Config.from_pretrained("google/umt5-xxl")
+                # Try local cache first (pre-cached during setup), fall back to download
+                try:
+                    t5_config = UMT5Config.from_pretrained(
+                        "google/umt5-xxl", local_files_only=True
+                    )
+                except OSError:
+                    t5_config = UMT5Config.from_pretrained("google/umt5-xxl")
                 self._model = UMT5EncoderModel(t5_config).to(dtype=dtype)
                 self._model.load_state_dict(state_dict, strict=False)
+                # Fix embed_tokens weight tying (see _fix_t5_embed_tokens)
+                self._fix_t5_embed_tokens(self._model)
 
             # Priority 2: Wan model directory with text_encoder subfolder
             elif (model_path := Path(self._model_id)).is_dir() and (
@@ -161,6 +169,8 @@ class T5TextEncoder:
                     subfolder="text_encoder",
                     torch_dtype=dtype,
                 )
+                # Fix embed_tokens weight tying (see _fix_t5_embed_tokens)
+                self._fix_t5_embed_tokens(self._model)
                 tokenizer_path = model_path / "tokenizer"
                 if tokenizer_path.is_dir():
                     self._tokenizer = AutoTokenizer.from_pretrained(
@@ -178,6 +188,8 @@ class T5TextEncoder:
                     self._model_id,
                     torch_dtype=dtype,
                 )
+                # Fix embed_tokens weight tying (see _fix_t5_embed_tokens)
+                self._fix_t5_embed_tokens(self._model)
                 self._tokenizer = AutoTokenizer.from_pretrained(
                     self._model_id,
                 )
@@ -194,6 +206,38 @@ class T5TextEncoder:
                 f"Failed to load T5 encoder from '{source}': {e}\n"
                 f"Check that the path or model ID is correct."
             ) from e
+
+    @staticmethod
+    def _fix_t5_embed_tokens(model: Any) -> None:
+        """Fix T5 embed_tokens weight tying bug.
+
+        The Wan-AI T5 checkpoint stores the token embedding as
+        "shared.weight", but UMT5EncoderModel keeps a separate
+        "encoder.embed_tokens.weight" that should be tied to it.
+        Neither load_state_dict(strict=False) nor from_pretrained()
+        performs this tying automatically, leaving embed_tokens as
+        all zeros. This causes the T5 to output zero embeddings,
+        making the model generate unconditionally (ignoring prompts).
+
+        WHY: Without this fix, T5 produces embeddings but ignores
+        most of the prompt content -- the model generates coherent
+        but hallucinated output that doesn't follow the text.
+
+        Fix: copy the shared.weight tensor to encoder.embed_tokens.
+        Only applied when embed_tokens is all zeros and shared has
+        real weights (safe no-op if weights are already correct).
+        """
+        if (
+            hasattr(model, "shared")
+            and hasattr(model, "encoder")
+            and hasattr(model.encoder, "embed_tokens")
+        ):
+            import torch
+            shared = model.shared.weight
+            embed = model.encoder.embed_tokens.weight
+            # Only fix if embed_tokens is zeros and shared has real weights
+            if (embed == 0).all() and not (shared == 0).all():
+                model.encoder.embed_tokens.weight = shared
 
     def encode(self, input_path: str, **kwargs: Any) -> dict[str, Any]:
         """Encode a caption text file through T5.

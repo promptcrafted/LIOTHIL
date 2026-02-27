@@ -390,8 +390,8 @@ class TestGetWanBackend:
             get_wan_backend(config)
 
         _, kwargs = mock_backend_cls.call_args
-        assert kwargs["boundary_ratio"] == 0.875   # 2.2_t2v default
-        assert kwargs["flow_shift"] == 3.0         # all-variant default
+        assert kwargs["boundary_ratio"] == 0.875  # 2.2_t2v default
+        assert kwargs["flow_shift"] == 5.0       # validated T2V default
         assert kwargs["is_moe"] is True
         assert kwargs["is_i2v"] is False
         assert kwargs["in_channels"] == 16

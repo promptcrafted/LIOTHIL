@@ -35,7 +35,7 @@ WAN_VARIANTS: dict[str, dict[str, Any]] = {
         "in_channels": WAN_T2V_IN_CHANNELS,
         "num_blocks": WAN_NUM_BLOCKS,
         "boundary_ratio": 0.875,
-        "flow_shift": 3.0,
+        "flow_shift": 5.0,
         "lora_targets": list(T2V_LORA_TARGETS),
         "expert_subfolders": dict(WAN_EXPERT_SUBFOLDERS),
         "pipeline_class": "WanPipeline",

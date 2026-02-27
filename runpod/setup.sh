@@ -17,6 +17,12 @@
 
 set -e  # Stop on any error
 
+# --- Environment variables for training ---
+# Unbuffered Python output so nohup logs flush in real time
+export PYTHONUNBUFFERED=1
+# Reduce CUDA memory fragmentation for large models (14B+ params)
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 echo "=============================================="
 echo "  Dimljus — RunPod Setup"
 echo "=============================================="
@@ -46,6 +52,9 @@ fi
 # NOTE: These live on the container disk, so they need reinstalling after restart.
 pip install -q -e ".[wan]" 2>/dev/null || pip install -q -e . 2>/dev/null
 pip install -q huggingface_hub hf_transfer
+# bitsandbytes is required for adamw8bit optimizer (included in [wan] extras,
+# but explicit install here ensures it's available even on partial installs)
+pip install -q bitsandbytes 2>/dev/null || true
 echo "  Done: dimljus installed"
 
 # --- 3. Set up HuggingFace ---
@@ -131,9 +140,49 @@ download_model \
     "models_t5_umt5-xxl-enc-bf16.pth" \
     "/workspace/models/models_t5_umt5-xxl-enc-bf16.pth"
 
-# --- 5. Create directory structure ---
+# --- 5. Pre-cache HuggingFace configs, tokenizers, and T5 encoder ---
 echo ""
-echo "[5/5] Creating directory structure..."
+echo "[5/7] Pre-caching HuggingFace configs and T5 text encoder..."
+# The T5 tokenizer and config are tiny (<5MB) but downloaded on first use.
+# The T5 encoder weights (~10GB) are cached from the Wan 2.2 Diffusers repo
+# because the standalone .pth file from Wan-AI has wrong weights (all 243 keys
+# differ from the HF repo — it's NOT the Wan 2.2 T5). Loading from the HF
+# repo via from_pretrained() gets the correct weights.
+export HF_HOME=/workspace/.cache/huggingface
+python3 -c "
+import os
+os.environ['HF_HOME'] = '/workspace/.cache/huggingface'
+from transformers import AutoTokenizer, UMT5Config, UMT5EncoderModel
+
+# T5 tokenizer and config
+AutoTokenizer.from_pretrained('google/umt5-xxl')
+UMT5Config.from_pretrained('google/umt5-xxl')
+print('  Cached: T5 tokenizer + config')
+
+# T5 encoder weights from Wan 2.2 Diffusers repo (correct weights)
+# This is ~10GB but only downloads once — subsequent loads use the cache.
+print('  Downloading T5 encoder from Wan-AI/Wan2.2-T2V-A14B-Diffusers...')
+UMT5EncoderModel.from_pretrained(
+    'Wan-AI/Wan2.2-T2V-A14B-Diffusers',
+    subfolder='text_encoder',
+)
+print('  Cached: T5 encoder weights (from HF repo)')
+" || echo "  WARNING: Could not pre-cache T5 (network issue?)"
+echo "  Done"
+
+# --- 6. Persist environment variables ---
+echo ""
+echo "[6/7] Setting environment variables..."
+# These go in .bashrc so they persist across SSH sessions and nohup commands
+grep -q PYTHONUNBUFFERED /root/.bashrc 2>/dev/null || {
+    echo 'export PYTHONUNBUFFERED=1' >> /root/.bashrc
+    echo 'export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True' >> /root/.bashrc
+}
+echo "  Done: PYTHONUNBUFFERED, PYTORCH_CUDA_ALLOC_CONF"
+
+# --- 7. Create directory structure ---
+echo ""
+echo "[7/7] Creating directory structure..."
 mkdir -p /workspace/datasets
 mkdir -p /workspace/outputs
 echo "  Done"
@@ -155,7 +204,7 @@ echo "  2. Copy and edit a training config:"
 echo "     cp /workspace/dimljus/examples/full_train.yaml /workspace/my_train.yaml"
 echo "     Edit data_config to point to your dataset directory"
 echo ""
-echo "  3. Start training:"
+echo "  3. Start training (in tmux so it survives disconnects):"
 echo "     tmux new -s train"
 echo "     python /workspace/dimljus/runpod/train.py --config /workspace/my_train.yaml"
 echo ""

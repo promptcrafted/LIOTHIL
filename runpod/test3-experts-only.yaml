@@ -1,23 +1,18 @@
 # =============================================================================
-# Test Training Config — RunPod Validation
+# Test 3: Expert-Only — No unified phase, fork from scratch
 # =============================================================================
-# Minimal config for verifying the pipeline works end-to-end.
-# Upload a small dataset (5-10 clips + .txt captions) to:
-#   /workspace/datasets/test/
+# Validates the "expert from scratch" mode: skip unified warmup, train each
+# expert independently from random init. unified_epochs: 0 + fork_enabled: true.
 #
-# Usage:
-#   # Dry run (validate only, no GPU)
-#   python /workspace/dimljus/runpod/train.py --config /workspace/dimljus/runpod/test-train.yaml --dry-run
+# Should produce 2 phases: LOW_NOISE (3 epochs) → HIGH_NOISE (3 epochs).
+# Each phase produces 3 checkpoints (save_every_n_epochs: 1).
+# Final merged LoRA combines both experts with diffusers-compatible keys.
 #
-#   # Full run
-#   python /workspace/dimljus/runpod/train.py --config /workspace/dimljus/runpod/test-train.yaml
-
+# After training, run inference to validate the merged LoRA loads correctly.
 
 # ── Model ───────────────────────────────────────────────────────────
 model:
   variant: 2.2_t2v
-
-  # Individual weight files (downloaded by setup.sh)
   dit_high: /workspace/models/wan2.2_t2v_high_noise_14B_fp16.safetensors
   dit_low: /workspace/models/wan2.2_t2v_low_noise_14B_fp16.safetensors
   vae: /workspace/models/wan_2.1_vae.safetensors
@@ -25,66 +20,59 @@ model:
 
 data_config: /workspace/datasets/test/dimljus_data.yaml
 
-# ── Cache ─────────────────────────────────────────────────────────
 cache:
   cache_dir: /workspace/dimljus/cache
-
 
 # ── LoRA ────────────────────────────────────────────────────────────
 lora:
   rank: 16
   alpha: 16
 
-
 # ── Optimizer ───────────────────────────────────────────────────────
 optimizer:
   type: adamw8bit
   learning_rate: 5e-5
-
 
 # ── Training ────────────────────────────────────────────────────────
 training:
   mixed_precision: bf16
   gradient_checkpointing: true
   seed: 42
-  unified_epochs: 3                    # Short — just testing the pipeline
+  unified_epochs: 0                    # KEY: no unified phase
   batch_size: 1
-
 
 # ── MoE ─────────────────────────────────────────────────────────────
 moe:
   enabled: true
-  fork_enabled: true
+  fork_enabled: true                   # KEY: fork enabled but unified_epochs: 0
+                                       # = expert-from-scratch mode
 
   high_noise:
     learning_rate: 1e-4
-    max_epochs: 3                      # Short for testing
+    max_epochs: 3
 
   low_noise:
     learning_rate: 8e-5
-    max_epochs: 3                      # Short for testing
-
+    max_epochs: 3
 
 # ── Save ────────────────────────────────────────────────────────────
 save:
   save_every_n_epochs: 1
-  output_dir: /workspace/outputs/test-run
+  output_dir: /workspace/outputs/test3-experts-only
   name: test_lora
-
 
 # ── Logging ─────────────────────────────────────────────────────────
 logging:
   backends: [console]
   log_every_n_steps: 1
 
-
 # ── Sampling ────────────────────────────────────────────────────────
 sampling:
   enabled: true
-  every_n_epochs: 3               # Sample at the end of each phase (3 epochs)
+  every_n_epochs: 3                    # Sample at end of each expert phase
   prompts:
-    - "A woman with dark hair styled in an updo walks down a city street, wearing a black dress and pearls, morning light."
+    - "Medium shot, Holly Golightly walks up an indoor staircase, looking back over her shoulder, morning light."
   neg: "blurry, low quality, distorted"
   seed: 42
-  sample_steps: 20                # Fewer steps for faster test sampling
+  sample_steps: 30
   guidance_scale: 4.0

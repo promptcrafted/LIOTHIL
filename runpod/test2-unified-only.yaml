@@ -60,4 +60,4 @@ sampling:
   neg: "blurry, low quality, distorted"
   seed: 42
   sample_steps: 20
-  guidance_scale: 5.0
+  guidance_scale: 4.0

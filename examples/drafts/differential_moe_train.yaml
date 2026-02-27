@@ -43,7 +43,7 @@ moe:
     # dropout: 0.05                      # Consider higher dropout for low-noise
     # weight_decay: 0.02                 # Consider higher regularization for low-noise
 
-  # boundary_ratio: 0.875               # Override expert routing boundary if needed
+  # boundary_ratio: 0.5                 # Override expert routing boundary if needed
 
 training:
   unified_epochs: 10                     # Shared phase duration (hypothesis — tune this)

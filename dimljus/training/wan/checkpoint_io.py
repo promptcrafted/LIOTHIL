@@ -1,14 +1,17 @@
-"""Format conversion — dimljus ↔ musubi ↔ ComfyUI checkpoint compatibility.
+"""Format conversion — dimljus ↔ musubi ↔ ComfyUI ↔ diffusers compatibility.
 
-Dimljus uses PEFT/diffusers naming (the ai-toolkit convention):
+Dimljus internal format (clean, model-agnostic):
     blocks.0.attn1.to_q.lora_A.weight
 
-Musubi-tuner (kohya/sd-scripts lineage) uses:
+Diffusers format (for pipeline.load_lora_weights()):
+    transformer.blocks.0.attn1.to_q.lora_A.weight
+
+Musubi-tuner (kohya/sd-scripts lineage):
     lora_unet_blocks_0_attn1_to_q.lora_down.weight
 
-Both formats store the same tensors — just different key naming. This module
-converts between them so dimljus LoRAs work in musubi/ComfyUI/A1111, and
-musubi LoRAs can be loaded into dimljus for continued training.
+This module converts between all three formats so dimljus LoRAs work in
+musubi/ComfyUI/A1111 and with diffusers inference pipelines, and external
+LoRAs can be loaded into dimljus for continued training.
 
 GPU-free — operates on string keys and doesn't touch tensor values.
 """
@@ -26,6 +29,96 @@ from dimljus.training.wan.constants import (
     I2V_EXTRA_TARGETS,
     WAN_NUM_BLOCKS,
 )
+
+
+# ---------------------------------------------------------------------------
+# Diffusers prefix constants
+# ---------------------------------------------------------------------------
+# Diffusers WanPipeline names its two transformers:
+#   pipeline.transformer   = HIGH-noise expert
+#   pipeline.transformer_2 = LOW-noise expert
+# LoRA keys must be prefixed with the component name so that
+# pipeline.load_lora_weights() routes them to the right model.
+
+DIFFUSERS_HIGH_NOISE_PREFIX = "transformer"
+"""Diffusers component name for the high-noise expert."""
+
+DIFFUSERS_LOW_NOISE_PREFIX = "transformer_2"
+"""Diffusers component name for the low-noise expert."""
+
+
+# ---------------------------------------------------------------------------
+# Diffusers prefix add / strip
+# ---------------------------------------------------------------------------
+
+def add_diffusers_prefix(
+    state_dict: dict[str, Any],
+    prefix: str = DIFFUSERS_HIGH_NOISE_PREFIX,
+) -> dict[str, Any]:
+    """Add a diffusers component prefix to clean LoRA keys.
+
+    Converts internal dimljus format to diffusers-loadable format:
+        blocks.0.attn1.to_q.lora_A.weight
+        → transformer.blocks.0.attn1.to_q.lora_A.weight
+
+    Args:
+        state_dict: Clean dimljus-format state dict.
+        prefix: Component name to prepend (e.g. 'transformer').
+
+    Returns:
+        New dict with prefixed keys and same tensor values.
+    """
+    return {f"{prefix}.{k}": v for k, v in state_dict.items()}
+
+
+def strip_diffusers_prefix(state_dict: dict[str, Any]) -> dict[str, Any]:
+    """Remove diffusers component prefix from LoRA keys.
+
+    Converts diffusers-format keys back to clean dimljus internal format:
+        transformer.blocks.0.attn1.to_q.lora_A.weight
+        → blocks.0.attn1.to_q.lora_A.weight
+
+    Handles both 'transformer.' and 'transformer_2.' prefixes.
+    Keys without a known prefix are passed through unchanged.
+
+    Args:
+        state_dict: Diffusers-format state dict (may have prefixes).
+
+    Returns:
+        New dict with clean keys and same tensor values.
+    """
+    _KNOWN_PREFIXES = (
+        f"{DIFFUSERS_LOW_NOISE_PREFIX}.",   # Check longer prefix first
+        f"{DIFFUSERS_HIGH_NOISE_PREFIX}.",
+    )
+    result: dict[str, Any] = {}
+    for key, value in state_dict.items():
+        clean_key = key
+        for prefix in _KNOWN_PREFIXES:
+            if key.startswith(prefix):
+                clean_key = key[len(prefix):]
+                break
+        result[clean_key] = value
+    return result
+
+
+def has_diffusers_prefix(state_dict: dict[str, Any]) -> bool:
+    """Check whether a state dict has diffusers component prefixes.
+
+    Returns True if any key starts with 'transformer.' or 'transformer_2.'.
+    Useful for auto-detecting the format when loading a LoRA file.
+
+    Args:
+        state_dict: State dict to inspect.
+
+    Returns:
+        True if prefixed keys are detected.
+    """
+    for key in state_dict:
+        if key.startswith(f"{DIFFUSERS_HIGH_NOISE_PREFIX}.") or \
+           key.startswith(f"{DIFFUSERS_LOW_NOISE_PREFIX}."):
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
