@@ -3,12 +3,27 @@
 Tests:
   A. Both experts, no LoRA, 30 steps — verify base model generates coherently
   B. Both experts + LoRA via load_lora_weights() — verify the LoRA loading path
-  C. Both experts + LoRA via WanInferencePipeline — verify the dimljus pipeline
 
 Diffusers WanPipeline convention:
   transformer   = HIGH-noise expert (runs first, handles large timesteps)
   transformer_2 = LOW-noise expert  (runs second, handles small timesteps)
   boundary_ratio = 0.5 for T2V (50/50 split between experts)
+
+KEY FIX (diffusers#12329):
+  Every WanTransformer3DModel.from_single_file() call MUST include:
+    config="Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+    subfolder="transformer" (high-noise) or "transformer_2" (low-noise)
+  Without this, diffusers silently loads Wan 2.1 config instead of 2.2,
+  producing noise/garbage output despite identical weight shapes.
+
+ESCALATION PLAN (if base inference still produces noise after config= fix):
+  Step 1: [DONE] Add config= to from_single_file() — this IS the model loading fix
+  Step 2: Try from_pretrained with full HF repo "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+          instead of from_single_file as an A/B test. If from_pretrained works but
+          from_single_file doesn't, the bug is in config detection.
+  Step 3: Build a minimal stock diffusers reference pipeline (pure diffusers, no
+          dimljus code at all) as ground truth. If stock diffusers also fails,
+          the issue is in the model weights or diffusers version.
 
 Usage:
     python /workspace/dimljus/runpod/test_base_inference.py
@@ -263,15 +278,20 @@ def main():
     print("\n" + "=" * 60)
     print("  SUMMARY")
     print("=" * 60)
+    print("  Check .grid.png files first — quickest way to see if output is coherent.")
+    print()
     for label, path_str in [("Dual-Base", "/workspace/test_A_dual_base"),
                             ("LoRA-Diffusers", "/workspace/test_B_lora_diffusers")]:
         mp4 = Path(f"{path_str}.mp4")
         png = Path(f"{path_str}.png")
+        grid = Path(f"{path_str}.grid.png")
+        if grid.exists():
+            print(f"  {label} GRID: {grid} ({grid.stat().st_size / 1024:.0f} KB)")
         if mp4.exists():
-            print(f"  {label}: {mp4} ({mp4.stat().st_size / 1024:.0f} KB)")
+            print(f"  {label} VIDEO: {mp4} ({mp4.stat().st_size / 1024:.0f} KB)")
         if png.exists():
             print(f"  {label} first frame: {png} ({png.stat().st_size / 1024:.0f} KB)")
-        if not mp4.exists() and not png.exists():
+        if not mp4.exists() and not png.exists() and not grid.exists():
             png_dir = mp4.with_suffix("")
             if png_dir.exists():
                 pngs = list(png_dir.glob("*.png"))
