@@ -15,8 +15,9 @@ KEY FIXES:
      include config= and subfolder= to prevent silent Wan 2.1 misdetection.
   2. T5 loaded from HF repo (Wan-AI/Wan2.2-T2V-A14B-Diffusers), NOT from the
      standalone .pth file which contains wrong/uninitialized weights.
-  3. Pipeline handles T5 encoding internally -- avoids embed_tokens weight
-     tying issues that occur with separate T5 loading.
+  3. T5 embed_tokens weight tying: encoder.embed_tokens.weight is MISSING from
+     the HF checkpoint and gets zero-initialized. Must copy shared.weight to
+     embed_tokens after loading, otherwise T5 ignores prompt content entirely.
 
 Usage:
     HF_TOKEN=hf_xxx python /workspace/dimljus/runpod/test_base_inference.py
@@ -144,6 +145,17 @@ def main():
     )
     # VAE in float32 for quality (official recommendation)
     pipeline.vae = pipeline.vae.to(dtype=torch.float32)
+
+    # Fix T5 embed_tokens weight tying bug: the HF checkpoint stores the
+    # token embedding as "shared.weight" but UMT5EncoderModel expects it
+    # at "encoder.embed_tokens.weight". The weight is MISSING from the
+    # checkpoint, so embed_tokens is zero-initialized. Without this fix,
+    # the T5 ignores prompt content entirely (coherent but hallucinated output).
+    t5 = pipeline.text_encoder
+    if hasattr(t5, "shared") and hasattr(t5, "encoder") and hasattr(t5.encoder, "embed_tokens"):
+        if not torch.equal(t5.shared.weight, t5.encoder.embed_tokens.weight):
+            t5.encoder.embed_tokens.weight = t5.shared.weight
+            print("  Fixed T5 embed_tokens weight tying (was zero-initialized)")
 
     print(f"  Pipeline loaded (from_pretrained)")
     print(f"  Scheduler: {type(pipeline.scheduler).__name__}")
