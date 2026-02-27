@@ -47,11 +47,11 @@ Plans:
   4. When both experts are trained, their loss values are logged separately so divergence is visible over epochs
   5. Fixed-seed visual samples are generated at configurable intervals during training (using the working inference from Phase 1)
   6. After training a phase where one expert is frozen, the frozen expert's weight checksums before and after confirm no modification occurred
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 02-01: TBD
-- [ ] 02-02: TBD
+- [ ] 02-01-PLAN.md — Core metrics: W&B define_metric for per-phase panels, VRAMTracker, RunTimer, auto run naming, config save
+- [ ] 02-02-PLAN.md — Visual samples + verification: W&B video/grid logging, frozen-expert weight checksums, default prompts
 
 ### Phase 3: Expert Isolation Tests
 **Goal**: Each expert (low-noise and high-noise) can be trained independently and produces valid checkpoints
