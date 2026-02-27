@@ -1,13 +1,14 @@
 """Diagnostic inference test — dual expert, proper Wan 2.2 pipeline.
 
 Tests:
-  A. Both experts, no LoRA, 20 steps — verify base model generates coherently
-  B. Both experts, unified LoRA on both, 20 steps — verify LoRA adds something
+  A. Both experts, no LoRA, 30 steps — verify base model generates coherently
+  B. Both experts + LoRA via load_lora_weights() — verify the LoRA loading path
+  C. Both experts + LoRA via WanInferencePipeline — verify the dimljus pipeline
 
 Diffusers WanPipeline convention:
   transformer   = HIGH-noise expert (runs first, handles large timesteps)
   transformer_2 = LOW-noise expert  (runs second, handles small timesteps)
-  boundary_ratio = 0.875 for T2V (switch at timestep 875/1000)
+  boundary_ratio = 0.5 for T2V (50/50 split between experts)
 
 Usage:
     python /workspace/dimljus/runpod/test_base_inference.py
@@ -99,20 +100,19 @@ def main():
     VAE_PATH = "/workspace/models/wan_2.1_vae.safetensors"
     T5_PATH = "/workspace/models/models_t5_umt5-xxl-enc-bf16.pth"
 
-    # Generation settings — 480x832 is the WanPipeline default for 480p
+    # Validated generation settings (from ComfyUI quality path + practitioner advice)
     HEIGHT = 480
     WIDTH = 832
     NUM_FRAMES = 17
-    STEPS = 20
-    # Wan 2.2 T2V: boundary at 87.5% of noise schedule
-    BOUNDARY_RATIO = 0.875
-    # CFG: 4.0 for high-noise expert, 3.0 for low-noise expert (from official example)
-    GUIDANCE_SCALE = 4.0
-    GUIDANCE_SCALE_2 = 3.0
+    STEPS = 30
+    BOUNDARY_RATIO = 0.5        # 50/50 split: 15 steps high-noise, 15 steps low-noise
+    GUIDANCE_SCALE = 4.0        # Same CFG for both experts
+    SHIFT = 5.0                 # FlowMatchEulerDiscreteScheduler shift
 
     # ── Load T5 and encode prompts ────────────────────────────────
     print("Loading T5 encoder...")
     from transformers import AutoTokenizer, UMT5EncoderModel, UMT5Config
+    from dimljus.training.wan.inference import WanInferencePipeline
 
     tokenizer = AutoTokenizer.from_pretrained("google/umt5-xxl")
     config = UMT5Config.from_pretrained("google/umt5-xxl")
@@ -120,6 +120,8 @@ def main():
     t5_sd = torch.load(T5_PATH, map_location="cpu", weights_only=True)
     text_encoder.load_state_dict(t5_sd, strict=False)
     del t5_sd
+    # Fix T5 embed_tokens weight tying
+    WanInferencePipeline._fix_t5_embed_tokens(text_encoder)
     text_encoder = text_encoder.to("cuda", dtype=torch.bfloat16)
     text_encoder.eval()
 
@@ -136,14 +138,19 @@ def main():
     from diffusers.models import WanTransformer3DModel
 
     print("  Loading high-noise expert...")
+    # config= prevents diffusers from guessing wrong model config (diffusers#12329).
+    # Without it, from_single_file auto-detects Wan 2.1 config instead of Wan 2.2
+    # because the transformer weight shapes are identical — silent garbage output.
     model_high = WanTransformer3DModel.from_single_file(
-        MODEL_HIGH, torch_dtype=torch.bfloat16
+        MODEL_HIGH, torch_dtype=torch.bfloat16,
+        config="Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="transformer",
     ).to("cuda").eval()
     print(f"  High loaded. VRAM: {torch.cuda.memory_allocated() / 1024**3:.1f} GB")
 
     print("  Loading low-noise expert...")
     model_low = WanTransformer3DModel.from_single_file(
-        MODEL_LOW, torch_dtype=torch.bfloat16
+        MODEL_LOW, torch_dtype=torch.bfloat16,
+        config="Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="transformer_2",
     ).to("cuda").eval()
     print(f"  Both loaded. VRAM: {torch.cuda.memory_allocated() / 1024**3:.1f} GB")
 
@@ -157,12 +164,8 @@ def main():
         VAE_PATH, torch_dtype=torch.float32
     ).to("cuda")
 
-    scheduler = FlowMatchEulerDiscreteScheduler(shift=3.0)
+    scheduler = FlowMatchEulerDiscreteScheduler(shift=SHIFT)
 
-    # Diffusers convention:
-    #   transformer   = HIGH-noise expert (large timesteps, runs first)
-    #   transformer_2 = LOW-noise expert  (small timesteps, runs second)
-    #   boundary_ratio = 0.875 means switch at timestep 875/1000
     pipeline = WanPipeline(
         transformer=model_high,
         transformer_2=model_low,
@@ -170,13 +173,14 @@ def main():
         text_encoder=None,
         tokenizer=None,
         scheduler=scheduler,
+        boundary_ratio=BOUNDARY_RATIO,
     )
     print(f"  Pipeline built. VRAM: {torch.cuda.memory_allocated() / 1024**3:.1f} GB")
 
     # ── Test A: Both experts, no LoRA ─────────────────────────────
     print("\n" + "=" * 60)
     print(f"  TEST A: Both experts, no LoRA, {STEPS} steps, {HEIGHT}x{WIDTH}, {NUM_FRAMES} frames")
-    print(f"  boundary_ratio={BOUNDARY_RATIO}, CFG={GUIDANCE_SCALE}/{GUIDANCE_SCALE_2}")
+    print(f"  boundary_ratio={BOUNDARY_RATIO}, shift={SHIFT}, CFG={GUIDANCE_SCALE}")
     print("=" * 60)
 
     generator = torch.Generator(device="cuda").manual_seed(42)
@@ -186,11 +190,10 @@ def main():
             negative_prompt_embeds=neg_embeds.to("cuda", dtype=torch.bfloat16),
             num_inference_steps=STEPS,
             guidance_scale=GUIDANCE_SCALE,
-            guidance_scale_2=GUIDANCE_SCALE_2,
+            guidance_scale_2=GUIDANCE_SCALE,
             height=HEIGHT,
             width=WIDTH,
             num_frames=NUM_FRAMES,
-            boundary_ratio=BOUNDARY_RATIO,
             generator=generator,
         )
 
@@ -203,60 +206,33 @@ def main():
     from dimljus.training.sampler import _save_frames_to_video
     _save_frames_to_video(frames, out_a, fps=16)
 
-    # ── Test B: Both experts + unified LoRA on both ───────────────
+    # ── Test B: LoRA via pipeline.load_lora_weights() ─────────────
     print("\n" + "=" * 60)
-    print(f"  TEST B: Both experts + unified LoRA, {STEPS} steps")
+    print(f"  TEST B: Both experts + LoRA via load_lora_weights(), {STEPS} steps")
     print("=" * 60)
 
-    # Check if LoRA checkpoint exists
     if not Path(LORA_PATH).exists():
         print(f"  SKIPPED: LoRA not found at {LORA_PATH}")
         print("  Run test2-unified-only training first to generate this checkpoint")
     else:
-        # Remove models from pipeline before modifying them
-        pipeline.transformer = None
-        pipeline.transformer_2 = None
-        del pipeline
-        clean()
-
-        # Apply LoRA to both experts
-        print("  Applying LoRA to both experts...")
-        from dimljus.training.wan.modules import create_lora_on_model, inject_lora_state_dict
-        from dimljus.training.wan.constants import T2V_LORA_TARGETS
         from safetensors.torch import load_file
+        from dimljus.training.wan.checkpoint_io import (
+            has_diffusers_prefix,
+            add_diffusers_prefix,
+        )
 
         lora_sd = load_file(LORA_PATH)
         print(f"  LoRA: {len(lora_sd)} keys, {sum(v.numel() for v in lora_sd.values()) / 1e6:.1f}M params")
 
-        # Apply same unified LoRA to high-noise expert
-        model_high = create_lora_on_model(
-            model=model_high,
-            target_modules=T2V_LORA_TARGETS,
-            rank=16, alpha=16, dropout=0.0,
-        )
-        inject_lora_state_dict(model_high, lora_sd)
-        model_high.eval()
+        # Auto-prefix if needed (old checkpoints may not have transformer. prefix)
+        if not has_diffusers_prefix(lora_sd):
+            print("  Adding transformer. prefix for diffusers compatibility...")
+            lora_sd = add_diffusers_prefix(lora_sd, prefix="transformer")
 
-        # Apply same unified LoRA to low-noise expert
-        model_low = create_lora_on_model(
-            model=model_low,
-            target_modules=T2V_LORA_TARGETS,
-            rank=16, alpha=16, dropout=0.0,
-        )
-        inject_lora_state_dict(model_low, lora_sd)
-        model_low.eval()
-
-        print(f"  LoRA applied to both. VRAM: {torch.cuda.memory_allocated() / 1024**3:.1f} GB")
-
-        # Rebuild dual pipeline (same expert assignment)
-        pipeline = WanPipeline(
-            transformer=model_high,
-            transformer_2=model_low,
-            vae=vae,
-            text_encoder=None,
-            tokenizer=None,
-            scheduler=FlowMatchEulerDiscreteScheduler(shift=3.0),
-        )
+        # Apply LoRA via the standard diffusers API
+        print(f"  Loading LoRA via pipeline.load_lora_weights()...")
+        pipeline.load_lora_weights(lora_sd, adapter_name="dimljus")
+        print(f"  LoRA applied. VRAM: {torch.cuda.memory_allocated() / 1024**3:.1f} GB")
 
         generator = torch.Generator(device="cuda").manual_seed(42)
         with torch.no_grad():
@@ -265,27 +241,30 @@ def main():
                 negative_prompt_embeds=neg_embeds.to("cuda", dtype=torch.bfloat16),
                 num_inference_steps=STEPS,
                 guidance_scale=GUIDANCE_SCALE,
-                guidance_scale_2=GUIDANCE_SCALE_2,
+                guidance_scale_2=GUIDANCE_SCALE,
                 height=HEIGHT,
                 width=WIDTH,
                 num_frames=NUM_FRAMES,
-                boundary_ratio=BOUNDARY_RATIO,
                 generator=generator,
             )
 
         frames = output.frames if hasattr(output, "frames") else output
-        inspect_output(frames, "DUAL-LORA")
+        inspect_output(frames, "LORA-DIFFUSERS")
 
-        out_b = Path("/workspace/test_B_dual_lora.mp4")
+        out_b = Path("/workspace/test_B_lora_diffusers.mp4")
         save_first_frame(frames, out_b)
         _save_frames_to_video(frames, out_b, fps=16)
+
+        # Unload LoRA for next test
+        pipeline.unload_lora_weights()
+        print("  LoRA unloaded for next test")
 
     # ── Summary ──────────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("  SUMMARY")
     print("=" * 60)
     for label, path_str in [("Dual-Base", "/workspace/test_A_dual_base"),
-                            ("Dual-LoRA", "/workspace/test_B_dual_lora")]:
+                            ("LoRA-Diffusers", "/workspace/test_B_lora_diffusers")]:
         mp4 = Path(f"{path_str}.mp4")
         png = Path(f"{path_str}.png")
         if mp4.exists():

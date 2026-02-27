@@ -89,8 +89,8 @@ class WanModelBackend:
         is_i2v: bool = False,
         in_channels: int = 16,
         num_blocks: int = 40,
-        boundary_ratio: float | None = 0.875,
-        flow_shift: float = 3.0,
+        boundary_ratio: float | None = 0.5,
+        flow_shift: float = 5.0,
         lora_targets: list[str] | None = None,
         expert_subfolders: dict[str, str] | None = None,
         dit_path: str | None = None,
@@ -196,11 +196,20 @@ class WanModelBackend:
             # -- Single-file loading --
             # Load to CPU first, then the caller moves to GPU. This avoids
             # competing with any leftover VRAM from a previous model.
+            #
+            # CRITICAL: config= and subfolder= are required for Wan 2.2.
+            # Without them, from_single_file() silently loads Wan 2.1 config
+            # instead of Wan 2.2 (diffusers#12329) because the transformer
+            # weight shapes are identical between versions. This causes the
+            # model to produce noise/garbage output.
+            subfolder = self._resolve_config_subfolder(expert)
             try:
                 model = WanTransformer3DModel.from_single_file(
                     single_file,
                     torch_dtype=dtype,
                     device="cpu",
+                    config="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+                    subfolder=subfolder,
                 )
             except Exception as e:
                 raise ModelBackendError(
@@ -428,6 +437,31 @@ class WanModelBackend:
         new_model = self.load_model(config, expert=new_expert)
         print(f"  Expert switch complete.")
         return new_model
+
+    def _resolve_config_subfolder(self, expert: str | None) -> str:
+        """Determine the correct config subfolder for from_single_file().
+
+        When loading a Wan 2.2 transformer via from_single_file(), diffusers
+        needs an explicit config= parameter pointing to the HF repo, and a
+        subfolder= telling it which expert's config.json to read. Without this,
+        from_single_file() auto-detects the wrong config (Wan 2.1 instead of
+        Wan 2.2) because the weight shapes are identical — diffusers bug #12329.
+        The result is silent garbage output.
+
+        Uses the same mapping as WAN_EXPERT_SUBFOLDERS from constants.py:
+            - 'low_noise' → 'transformer_2'
+            - 'high_noise' or None (unified) → 'transformer'
+
+        Args:
+            expert: Which expert is being loaded ('high_noise', 'low_noise',
+                or None for unified/single-expert models).
+
+        Returns:
+            Subfolder string (e.g. 'transformer' or 'transformer_2').
+        """
+        if expert is not None and expert in WAN_EXPERT_SUBFOLDERS:
+            return WAN_EXPERT_SUBFOLDERS[expert]
+        return WAN_SINGLE_SUBFOLDER
 
     def _resolve_single_file_path(self, expert: str | None) -> str | None:
         """Determine which single-file path to use, if any.
