@@ -89,7 +89,7 @@ class WanModelBackend:
         is_i2v: bool = False,
         in_channels: int = 16,
         num_blocks: int = 40,
-        boundary_ratio: float | None = 0.5,
+        boundary_ratio: float | None = 0.6,
         flow_shift: float = 5.0,
         lora_targets: list[str] | None = None,
         expert_subfolders: dict[str, str] | None = None,

@@ -9,7 +9,7 @@ Memory strategy:
     2. Build diffusers WanPipeline from components:
        - transformer = HIGH-noise expert (runs first, large timesteps)
        - transformer_2 = LOW-noise expert (runs second, small timesteps)
-       - boundary_ratio = 0.5 for T2V, 0.9 for I2V
+       - boundary_ratio = 0.6 for T2V, 0.9 for I2V
        - VAE = loaded from disk (small: ~243MB), always float32
        - scheduler = FlowMatchEulerDiscreteScheduler with shift=5.0
     3. Generate using prompt_embeds (pre-encoded) → skip T5 entirely
@@ -605,9 +605,10 @@ class WanInferencePipeline:
             transformer_high = model
             transformer_low = None
 
-        # Boundary ratio: 0.5 for T2V (50/50 split between experts),
-        # 0.9 for I2V.
-        boundary = 0.9 if self._is_i2v else 0.5
+        # Boundary ratio: 0.6 for T2V (high-noise expert handles first 60%
+        # of steps, low-noise handles last 40%). Validated on RunPod against
+        # ComfyUI reference workflow (step 15/25 = 0.6). I2V uses 0.9.
+        boundary = 0.9 if self._is_i2v else 0.6
 
         if self._is_i2v:
             from diffusers import WanImageToVideoPipeline
