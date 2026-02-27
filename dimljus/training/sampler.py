@@ -79,6 +79,84 @@ def _prepare_frames(frames: Any) -> list[Any]:
     return []
 
 
+def _save_keyframe_grid(
+    frames: Any,
+    output_path: Path,
+    frame_indices: tuple[int, ...] = (0, 4, 8, 12, 16),
+) -> None:
+    """Save a horizontal grid of keyframes as a PNG for quick visual review.
+
+    Extracts specific frames from the video and arranges them side-by-side
+    in a single image. This lets you evaluate training quality at a glance
+    without watching the full video -- especially useful when reviewing
+    samples from RunPod or other remote environments.
+
+    Default frame_indices (0, 4, 8, 12, 16) correspond to frames 1, 5, 9,
+    13, 17 of a 17-frame Wan output -- evenly spaced across the clip.
+
+    Args:
+        frames: Pipeline output in any supported format (same as
+            _save_frames_to_video). Gets normalized via _prepare_frames().
+        output_path: Path to save the .png grid image.
+        frame_indices: 0-based indices of frames to include in the grid.
+            Indices beyond the frame count are silently skipped.
+    """
+    import numpy as np
+
+    frame_list = _prepare_frames(frames)
+    if not frame_list:
+        print("  Warning: No frames for keyframe grid")
+        return
+
+    # Extract requested frames, skipping any out-of-range indices
+    selected = []
+    for idx in frame_indices:
+        if idx < len(frame_list):
+            selected.append(frame_list[idx])
+
+    if not selected:
+        print("  Warning: No valid frame indices for keyframe grid")
+        return
+
+    # Convert all frames to PIL Images for consistent grid assembly
+    from PIL import Image
+
+    pil_frames: list[Image.Image] = []
+    for frame in selected:
+        if hasattr(frame, "save"):
+            # Already a PIL Image
+            pil_frames.append(frame)
+        elif isinstance(frame, np.ndarray):
+            if frame.dtype != np.uint8:
+                frame = (frame * 255).clip(0, 255).astype(np.uint8)
+            pil_frames.append(Image.fromarray(frame))
+        else:
+            print(f"  Warning: Unknown frame type {type(frame)}, skipping in grid")
+            continue
+
+    if not pil_frames:
+        print("  Warning: Could not convert any frames for keyframe grid")
+        return
+
+    # Create horizontal grid: all frames side by side
+    widths = [img.width for img in pil_frames]
+    heights = [img.height for img in pil_frames]
+    grid_width = sum(widths)
+    grid_height = max(heights)
+
+    grid = Image.new("RGB", (grid_width, grid_height))
+    x_offset = 0
+    for img in pil_frames:
+        grid.paste(img, (x_offset, 0))
+        x_offset += img.width
+
+    # Save the grid
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    grid.save(output_path)
+    size_kb = output_path.stat().st_size / 1024
+    print(f"  Keyframe grid saved: {output_path} ({size_kb:.0f} KB, {grid.width}x{grid.height}, {len(pil_frames)} frames)")
+
+
 def _save_frames_to_video(frames: Any, output_path: Path, fps: int = 16) -> None:
     """Save diffusers pipeline output frames to an MP4 file.
 
@@ -105,6 +183,13 @@ def _save_frames_to_video(frames: Any, output_path: Path, fps: int = 16) -> None
         export_to_video(frame_list, str(output_path), fps=fps)
         size_mb = output_path.stat().st_size / 1024 / 1024
         print(f"  Sample saved: {output_path} ({size_mb:.1f} MB)")
+
+        # Save keyframe grid alongside the video for quick visual review.
+        # This lets you evaluate training quality at a glance without
+        # watching the full video — invaluable for remote pod workflows.
+        grid_path = output_path.with_suffix(".grid.png")
+        _save_keyframe_grid(frames, grid_path)
+
         return
     except Exception as e:
         print(f"  Warning: export_to_video failed ({e}), trying fallback...")
@@ -133,6 +218,10 @@ def _save_frames_to_video(frames: Any, output_path: Path, fps: int = 16) -> None
             print(f"  Warning: Failed to save frame {idx}: {e}")
 
     print(f"  Sample frames saved to: {png_dir} ({len(frame_list)} frames)")
+
+    # Save keyframe grid even when falling back to individual PNGs
+    grid_path = output_path.with_suffix(".grid.png")
+    _save_keyframe_grid(frames, grid_path)
 
 
 class SamplingEngine:
@@ -164,7 +253,7 @@ class SamplingEngine:
         seed: int = 42,
         walk_seed: bool = True,
         num_inference_steps: int = 30,
-        guidance_scale: float = 5.0,
+        guidance_scale: float = 4.0,
         sample_dir: str | Path | None = None,
         skip_phases: list[str] | None = None,
     ) -> None:
