@@ -1,0 +1,81 @@
+# =============================================================================
+# Test 4: Low-Noise Expert Isolation (TRAIN-01)
+# =============================================================================
+# Trains ONLY the low-noise expert in true isolation:
+#   - No unified warm-up phase (unified_epochs: 0)
+#   - No high-noise phase (high_noise.enabled: false)
+#   - Single phase: LOW_NOISE, 5 epochs
+#
+# Validates TRAIN-01: low-noise-only training completes without crash,
+# saves loadable checkpoints, and shows decreasing loss.
+#
+# Flat lr 5e-5 everywhere -- no per-expert learning rate overrides.
+# Samples generated every epoch for maximum visibility into convergence.
+
+# -- Model ---------------------------------------------------------------
+model:
+  variant: 2.2_t2v
+  dit_high: /workspace/models/wan2.2_t2v_high_noise_14B_fp16.safetensors
+  dit_low: /workspace/models/wan2.2_t2v_low_noise_14B_fp16.safetensors
+  vae: /workspace/models/wan_2.1_vae.safetensors
+  t5: /workspace/models/models_t5_umt5-xxl-enc-bf16.pth
+
+data_config: /workspace/datasets/test/dimljus_data.yaml
+
+cache:
+  cache_dir: /workspace/dimljus/cache
+
+# -- LoRA ----------------------------------------------------------------
+lora:
+  rank: 16
+  alpha: 16
+
+# -- Optimizer -----------------------------------------------------------
+optimizer:
+  type: adamw8bit                       # 8-bit AdamW for VRAM efficiency on 14B
+  learning_rate: 5e-5                   # Flat lr -- no per-expert override
+
+# -- Training ------------------------------------------------------------
+training:
+  mixed_precision: bf16
+  gradient_checkpointing: true
+  seed: 42
+  unified_epochs: 0                     # KEY: no unified phase
+  batch_size: 1
+
+# -- MoE -----------------------------------------------------------------
+moe:
+  enabled: true
+  fork_enabled: true
+
+  high_noise:
+    enabled: false                      # KEY: disable high-noise expert
+    max_epochs: 5                       # Still needed for Pydantic validation
+
+  low_noise:
+    enabled: true                       # ONLY this expert trains
+    max_epochs: 5
+
+# -- Save ----------------------------------------------------------------
+save:
+  save_every_n_epochs: 1
+  output_dir: /workspace/outputs/test4-low-only
+  name: test_lora
+
+# -- Logging -------------------------------------------------------------
+logging:
+  backends: [console, wandb]
+  log_every_n_steps: 1
+  wandb_project: dimljus-isolation
+  wandb_run_name: low-only-r16-lr5e-05
+
+# -- Sampling ------------------------------------------------------------
+sampling:
+  enabled: true
+  every_n_epochs: 1                     # Sample every epoch for max visibility
+  prompts:
+    - "Medium shot, Holly Golightly walks up an indoor staircase, looking back over her shoulder, morning light."
+  neg: "blurry, low quality, distorted"
+  seed: 42
+  sample_steps: 30
+  guidance_scale: 4.0
