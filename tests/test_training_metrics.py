@@ -1,8 +1,10 @@
-"""Tests for dimljus.training.metrics — per-phase metric tracking."""
+"""Tests for dimljus.training.metrics — per-phase metric tracking and timing."""
+
+import time
 
 import pytest
 
-from dimljus.training.metrics import MetricsTracker, PhaseMetrics
+from dimljus.training.metrics import MetricsTracker, PhaseMetrics, RunTimer
 from dimljus.training.phase import PhaseType
 
 
@@ -111,3 +113,57 @@ class TestMetricsTracker:
         tracker.start_phase(PhaseType.LOW_NOISE)
         assert PhaseType.UNIFIED in tracker.tracked_phases
         assert PhaseType.LOW_NOISE in tracker.tracked_phases
+
+
+class TestRunTimer:
+    """Wall-clock timer for training phases and total run."""
+
+    def test_start_run_total_elapsed(self):
+        """start_run + total_elapsed gives a positive value."""
+        timer = RunTimer()
+        timer.start_run()
+        # Even a tiny sleep ensures elapsed > 0
+        time.sleep(0.01)
+        elapsed = timer.total_elapsed()
+        assert elapsed > 0.0
+
+    def test_start_phase_end_phase(self):
+        """start_phase + end_phase records timing for the named phase."""
+        timer = RunTimer()
+        timer.start_run()
+        timer.start_phase("unified")
+        time.sleep(0.01)
+        elapsed = timer.end_phase("unified")
+        assert elapsed > 0.0
+
+    def test_phase_times_property(self):
+        """phase_times returns a dict of recorded phase durations."""
+        timer = RunTimer()
+        timer.start_run()
+        timer.start_phase("high_noise")
+        time.sleep(0.01)
+        timer.end_phase("high_noise")
+        timer.start_phase("low_noise")
+        time.sleep(0.01)
+        timer.end_phase("low_noise")
+
+        pt = timer.phase_times
+        assert "high_noise" in pt
+        assert "low_noise" in pt
+        assert pt["high_noise"] > 0.0
+        assert pt["low_noise"] > 0.0
+
+    def test_phase_times_returns_copy(self):
+        """phase_times returns a copy, not the internal dict."""
+        timer = RunTimer()
+        pt1 = timer.phase_times
+        pt1["injected"] = 999.0
+        pt2 = timer.phase_times
+        assert "injected" not in pt2
+
+    def test_initial_state_zero(self):
+        """Before start_run, total_elapsed returns a value near perf_counter."""
+        timer = RunTimer()
+        # total_elapsed = perf_counter() - 0.0, which is a large number
+        # but should not raise
+        _ = timer.total_elapsed()

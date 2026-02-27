@@ -4,11 +4,15 @@ Tracks training metrics (loss, gradient norm, learning rate) per phase.
 Uses exponential moving average (EMA) for smoothed loss reporting and
 exports flat dicts for logger consumption.
 
+Also provides RunTimer for wall-clock timing of training phases and
+the total run.
+
 GPU-free — pure math on Python floats.
 """
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 from dimljus.training.phase import PhaseType
@@ -215,3 +219,64 @@ class MetricsTracker:
     def tracked_phases(self) -> list[PhaseType]:
         """List of phase types that have been tracked."""
         return list(self._phases.keys())
+
+
+class RunTimer:
+    """Wall-clock timer for training phases and total run.
+
+    Uses time.perf_counter() for highest-resolution monotonic clock on
+    Windows. Tracks per-phase durations and total run elapsed time.
+
+    Usage:
+        timer = RunTimer()
+        timer.start_run()
+
+        timer.start_phase("unified")
+        # ... training ...
+        elapsed = timer.end_phase("unified")  # returns seconds
+
+        total = timer.total_elapsed()
+    """
+
+    def __init__(self) -> None:
+        self._run_start: float = 0.0
+        self._phase_start: float = 0.0
+        self._phase_times: dict[str, float] = {}
+
+    def start_run(self) -> None:
+        """Mark the start of the training run."""
+        self._run_start = time.perf_counter()
+
+    def start_phase(self, phase_name: str) -> None:
+        """Mark the start of a training phase.
+
+        Args:
+            phase_name: Name of the phase (e.g. 'unified', 'high_noise').
+        """
+        self._phase_start = time.perf_counter()
+
+    def end_phase(self, phase_name: str) -> float:
+        """Mark the end of a training phase and record elapsed time.
+
+        Args:
+            phase_name: Name of the phase (must match start_phase call).
+
+        Returns:
+            Elapsed wall-clock seconds for this phase.
+        """
+        elapsed = time.perf_counter() - self._phase_start
+        self._phase_times[phase_name] = elapsed
+        return elapsed
+
+    def total_elapsed(self) -> float:
+        """Return total wall-clock seconds since start_run().
+
+        Returns:
+            Elapsed seconds since start_run() was called.
+        """
+        return time.perf_counter() - self._run_start
+
+    @property
+    def phase_times(self) -> dict[str, float]:
+        """Recorded phase durations in seconds (name -> elapsed)."""
+        return dict(self._phase_times)

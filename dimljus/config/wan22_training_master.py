@@ -1542,6 +1542,29 @@ class LoggingConfig(BaseModel):
             "Example: 'annika_r16_e50'"
         ),
     )
+    wandb_group: str | None = Field(
+        default=None,
+        description=(
+            "W&B run group for clustering related runs (e.g. same dataset, "
+            "different hyperparameters). Runs in the same group appear "
+            "together in the W&B dashboard."
+        ),
+    )
+    wandb_tags: list[str] = Field(
+        default_factory=list,
+        description=(
+            "W&B tags for filtering runs. Auto-populated with model variant "
+            "and training mode if empty."
+        ),
+    )
+    vram_sample_every_n_steps: int = Field(
+        default=50,
+        gt=0,
+        description=(
+            "Sample GPU VRAM usage every N training steps. Logged to W&B "
+            "as system/vram_allocated_gb. Default 50 (~1 sample per minute)."
+        ),
+    )
 
     @field_validator("backends", mode="before")
     @classmethod
