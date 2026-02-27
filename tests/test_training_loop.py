@@ -288,3 +288,107 @@ class TestPhaseTransitions:
         output = capsys.readouterr().out
         # Should show fork message after unified phase
         assert "FORK" in output or "unified" in output.lower()
+
+
+# ---------------------------------------------------------------------------
+# Tests: WeightVerifier wiring (Plan 02-02)
+# ---------------------------------------------------------------------------
+
+class TestWeightVerifierWiring:
+    """Verify WeightVerifier is created and wired into the orchestrator."""
+
+    def test_has_weight_verifier(self, tmp_path):
+        """Orchestrator creates a WeightVerifier instance."""
+        from dimljus.training.verification import WeightVerifier
+        config = MockConfig(tmp_path)
+        orch = TrainingOrchestrator(config, MockModelBackend())
+        assert hasattr(orch, "_weight_verifier")
+        assert isinstance(orch._weight_verifier, WeightVerifier)
+
+    def test_has_frozen_results_dict(self, tmp_path):
+        """Orchestrator initializes an empty frozen_results dict."""
+        config = MockConfig(tmp_path)
+        orch = TrainingOrchestrator(config, MockModelBackend())
+        assert hasattr(orch, "_frozen_results")
+        assert isinstance(orch._frozen_results, dict)
+        assert len(orch._frozen_results) == 0
+
+
+class TestGetFrozenExpertName:
+    """Test _get_frozen_expert_name helper method."""
+
+    def _make_phase(self, **kwargs):
+        """Create a minimal TrainingPhase for testing."""
+        from dimljus.training.phase import TrainingPhase
+        defaults = dict(
+            phase_type=PhaseType.UNIFIED, max_epochs=10,
+            learning_rate=5e-5, weight_decay=0.01,
+            optimizer_type="adamw8bit", scheduler_type="cosine_with_min_lr",
+            min_lr_ratio=0.01, warmup_steps=0, batch_size=1,
+            gradient_accumulation_steps=1, caption_dropout_rate=0.1,
+            lora_dropout=0.0, fork_targets=None, block_targets=None,
+            resume_from=None, boundary_ratio=None, active_expert=None,
+        )
+        defaults.update(kwargs)
+        return TrainingPhase(**defaults)
+
+    def test_high_noise_phase_freezes_low_noise(self, tmp_path):
+        """During high_noise training, low_noise should be frozen."""
+        config = MockConfig(tmp_path)
+        orch = TrainingOrchestrator(config, MockModelBackend())
+        phase = self._make_phase(
+            phase_type=PhaseType.HIGH_NOISE,
+            active_expert="high_noise",
+        )
+        assert orch._get_frozen_expert_name(phase) == "low_noise"
+
+    def test_low_noise_phase_freezes_high_noise(self, tmp_path):
+        """During low_noise training, high_noise should be frozen."""
+        config = MockConfig(tmp_path)
+        orch = TrainingOrchestrator(config, MockModelBackend())
+        phase = self._make_phase(
+            phase_type=PhaseType.LOW_NOISE,
+            active_expert="low_noise",
+        )
+        assert orch._get_frozen_expert_name(phase) == "high_noise"
+
+    def test_unified_phase_no_frozen_expert(self, tmp_path):
+        """Unified phase has no frozen expert."""
+        config = MockConfig(tmp_path)
+        orch = TrainingOrchestrator(config, MockModelBackend())
+        phase = self._make_phase(phase_type=PhaseType.UNIFIED)
+        assert orch._get_frozen_expert_name(phase) is None
+
+
+class TestRunSummaryWithFrozenChecks:
+    """Verify frozen checks are included in end-of-run summary."""
+
+    def test_summary_includes_frozen_checks_when_populated(self, tmp_path, capsys):
+        """When frozen_results has entries, they appear in the summary."""
+        config = MockConfig(tmp_path, moe=MockMoeConfig(fork_enabled=False))
+        config.training.unified_epochs = 1
+        config.save.save_every_n_epochs = 1
+        orch = TrainingOrchestrator(config, MockModelBackend())
+
+        # Manually populate frozen results to simulate a real run
+        orch._frozen_results = {"high_noise": True, "low_noise": True}
+        orch.run(dataset=None)
+
+        output = capsys.readouterr().out
+        assert "TRAINING COMPLETE" in output
+        # The frozen checks should appear in summary since we populated them
+        assert "Frozen expert verification" in output
+        assert "PASS" in output
+
+    def test_summary_no_frozen_section_when_empty(self, tmp_path, capsys):
+        """When no frozen results, the summary section is absent."""
+        config = MockConfig(tmp_path, moe=MockMoeConfig(fork_enabled=False))
+        config.training.unified_epochs = 1
+        config.save.save_every_n_epochs = 1
+        orch = TrainingOrchestrator(config, MockModelBackend())
+        orch.run(dataset=None)
+
+        output = capsys.readouterr().out
+        assert "TRAINING COMPLETE" in output
+        # No frozen checks section when results dict is empty
+        assert "Frozen expert verification" not in output

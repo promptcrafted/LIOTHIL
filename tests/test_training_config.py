@@ -907,8 +907,15 @@ class TestSamplingConfig:
     def test_default_every_n_epochs(self):
         assert SamplingConfig().every_n_epochs == 5
 
-    def test_default_prompts_empty(self):
-        assert SamplingConfig().prompts == []
+    def test_default_prompts_populated(self):
+        """Default prompts cover 4 key scenarios (updated in Plan 02-02)."""
+        prompts = SamplingConfig().prompts
+        assert len(prompts) == 4
+        # Verify the 4 scenarios: static person, motion, scenic, detail
+        assert any("person" in p.lower() for p in prompts)
+        assert any("cat" in p.lower() for p in prompts)
+        assert any("ocean" in p.lower() or "waves" in p.lower() for p in prompts)
+        assert any("close-up" in p.lower() or "hands" in p.lower() for p in prompts)
 
     def test_default_neg_empty(self):
         assert SamplingConfig().neg == ""

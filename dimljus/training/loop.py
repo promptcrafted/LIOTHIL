@@ -38,8 +38,9 @@ from dimljus.training.lora import LoRAState, merge_experts
 from dimljus.training.metrics import MetricsTracker, RunTimer
 from dimljus.training.vram import VRAMTracker
 from dimljus.training.optimizer import build_optimizer, build_scheduler, compute_total_steps
-from dimljus.training.phase import PhaseType, TrainingPhase, resolve_phases
+from dimljus.training.phase import PhaseType, TrainingPhase, resolve_phases, _EXPERT_NAME_TO_PHASE
 from dimljus.training.sampler import SamplingEngine
+from dimljus.training.verification import WeightVerifier
 
 
 # Default gradient norm limit — prevents training instability from spikes
@@ -136,6 +137,10 @@ class TrainingOrchestrator:
             ),
             skip_phases=getattr(config.sampling, "skip_phases", None),
         )
+
+        # Weight verifier — checksums frozen experts to catch silent corruption
+        self._weight_verifier = WeightVerifier()
+        self._frozen_results: dict[str, bool] = {}
 
         # State
         self._global_step = 0
@@ -249,6 +254,7 @@ class TrainingOrchestrator:
             phase_times=self._timer.phase_times,
             peak_vram_gb=self._vram_tracker.peak(),
             phase_losses=phase_losses,
+            frozen_checks=self._frozen_results if self._frozen_results else None,
         )
 
         # Cleanup inference pipeline if loaded (free VRAM)
@@ -293,6 +299,20 @@ class TrainingOrchestrator:
 
         # Get noise schedule from model backend
         noise_schedule = self._backend.get_noise_schedule()
+
+        # Snapshot frozen expert weights BEFORE this phase trains.
+        # During high_noise training, low_noise should be frozen (and vice versa).
+        # We checksum the frozen expert's checkpoint file on disk so we can
+        # verify it didn't change after the phase completes.
+        frozen_expert = self._get_frozen_expert_name(phase)
+        if frozen_expert is not None:
+            frozen_phase_type = _EXPERT_NAME_TO_PHASE[frozen_expert]
+            frozen_ckpt = self._checkpoint_mgr.find_latest_checkpoint(frozen_phase_type)
+            if frozen_ckpt is not None:
+                try:
+                    self._weight_verifier.snapshot(frozen_expert, checkpoint_path=frozen_ckpt)
+                except Exception as e:
+                    print(f"  Warning: Could not snapshot frozen expert '{frozen_expert}': {e}")
 
         # GPU training setup (only when real dataset provided)
         optimizer = None
@@ -339,6 +359,29 @@ class TrainingOrchestrator:
         if dataset is not None:
             active_lora = self._teardown_phase_lora(phase, active_lora)
 
+        # Verify frozen expert weights unchanged after this phase.
+        # This catches silent bugs where the frozen expert's checkpoint
+        # gets corrupted during the other expert's training.
+        if frozen_expert is not None and frozen_expert in self._weight_verifier._snapshots:
+            frozen_phase_type = _EXPERT_NAME_TO_PHASE[frozen_expert]
+            frozen_ckpt = self._checkpoint_mgr.find_latest_checkpoint(frozen_phase_type)
+            if frozen_ckpt is not None:
+                try:
+                    result = self._weight_verifier.verify(
+                        frozen_expert, checkpoint_path=frozen_ckpt,
+                    )
+                    self._logger.log_frozen_check(result)
+                    self._frozen_results[result.expert_name] = result.passed
+                    if not result.passed:
+                        import sys
+                        print(
+                            f"  WARNING: Frozen expert '{frozen_expert}' weights changed "
+                            f"during {phase.phase_type.value} training! This is a bug.",
+                            file=sys.stderr,
+                        )
+                except Exception as e:
+                    print(f"  Warning: Frozen expert verification failed: {e}")
+
         # Record phase wall-clock time
         phase_elapsed = self._timer.end_phase(phase.phase_type.value)
 
@@ -346,6 +389,28 @@ class TrainingOrchestrator:
 
         # Update stored LoRA reference
         self._update_lora_state(phase, active_lora)
+
+    # ------------------------------------------------------------------
+    # Frozen expert helpers
+    # ------------------------------------------------------------------
+
+    def _get_frozen_expert_name(self, phase: TrainingPhase) -> str | None:
+        """Get the name of the expert that should be frozen during this phase.
+
+        During high_noise training, low_noise is frozen (and vice versa).
+        During unified training, no expert is frozen.
+
+        Args:
+            phase: Current training phase.
+
+        Returns:
+            Expert name string ('high_noise' or 'low_noise'), or None.
+        """
+        if phase.active_expert == "high_noise":
+            return "low_noise"
+        elif phase.active_expert == "low_noise":
+            return "high_noise"
+        return None
 
     # ------------------------------------------------------------------
     # LoRA lifecycle (GPU — PEFT bridge)
@@ -1064,6 +1129,15 @@ class TrainingOrchestrator:
             )
             for i, path in enumerate(samples):
                 self._logger.log_sample_generated(path, i)
+
+            # Log samples to W&B (video + keyframe grid) so Minta can
+            # evaluate convergence directly from the W&B dashboard.
+            self._logger.log_samples_to_wandb(
+                sample_paths=samples,
+                phase_type=phase.phase_type.value,
+                epoch=epoch,
+                global_step=self._global_step,
+            )
         except Exception as e:
             # Sampling failure shouldn't crash training, but log a warning
             print(f"  Warning: Sampling failed (training continues): {e}")
