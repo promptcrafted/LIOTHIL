@@ -10,28 +10,28 @@ See: .planning/PROJECT.md (updated 2026-02-26)
 ## Current Position
 
 Phase: 1 of 7 (Fix Inference Pipeline)
-Plan: 0 of 2 in current phase
-Status: Ready to plan
-Last activity: 2026-02-26 -- Roadmap created
+Plan: 1 of 2 in current phase
+Status: Executing
+Last activity: 2026-02-27 -- Completed 01-01-PLAN.md
 
-Progress: [..........] 0%
+Progress: [#.........] 10%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 0
-- Average duration: -
-- Total execution time: 0 hours
+- Total plans completed: 1
+- Average duration: 4 min
+- Total execution time: 0.07 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 01-fix-inference-pipeline | 1 | 4 min | 4 min |
 
 **Recent Trend:**
-- Last 5 plans: -
-- Trend: -
+- Last 5 plans: 01-01 (4 min)
+- Trend: starting
 
 *Updated after each plan completion*
 
@@ -45,6 +45,9 @@ Recent decisions affecting current work:
 - Inference fix is hard prerequisite -- nothing validates without it
 - Metrics infrastructure comes before test runs so data is captured
 - Base strategy comparison after isolation, before production run
+- config= only needed for from_single_file(), not from_pretrained() (from_pretrained reads config.json correctly)
+- VAE from_single_file() does not need config= fix -- bug is transformer-only
+- Keyframe grid uses frame indices (0,4,8,12,16) for evenly spaced coverage of 17-frame output
 
 ### Pending Todos
 
@@ -59,6 +62,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-02-26
-Stopped at: Roadmap creation complete
+Last session: 2026-02-27
+Stopped at: Completed 01-01-PLAN.md (Fix from_single_file config + keyframe grids)
 Resume file: None

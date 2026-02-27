@@ -9,9 +9,9 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Inference
 
-- [ ] **INFER-01**: Base model inference produces recognizable video (not noise) with Wan 2.2 T2V
-- [ ] **INFER-02**: LoRA inference modifies base model output in a visually detectable way
-- [ ] **INFER-03**: Inference works both standalone (separate script) and integrated (from training pipeline)
+- [x] **INFER-01**: Base model inference produces recognizable video (not noise) with Wan 2.2 T2V
+- [x] **INFER-02**: LoRA inference modifies base model output in a visually detectable way
+- [x] **INFER-03**: Inference works both standalone (separate script) and integrated (from training pipeline)
 
 ### Training Isolation
 
@@ -78,9 +78,9 @@ Deferred to future milestone. Tracked but not in current roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| INFER-01 | Phase 1 | Pending |
-| INFER-02 | Phase 1 | Pending |
-| INFER-03 | Phase 1 | Pending |
+| INFER-01 | Phase 1 | Complete |
+| INFER-02 | Phase 1 | Complete |
+| INFER-03 | Phase 1 | Complete |
 | METR-01 | Phase 2 | Pending |
 | METR-02 | Phase 2 | Pending |
 | METR-03 | Phase 2 | Pending |
