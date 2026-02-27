@@ -61,10 +61,11 @@ Plans:
   1. Low-noise-only training (no unified warm-up, no high-noise phase) runs to completion without crash and saves a loadable checkpoint
   2. High-noise-only training (no unified warm-up, no low-noise phase) runs to completion without crash and saves a loadable checkpoint
   3. Loss curves for both isolation tests show decreasing loss over epochs (logged via Phase 2 metrics)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 03-01: TBD
+- [ ] 03-01-PLAN.md — Create isolation YAML configs, deploy to RunPod, execute both training runs back-to-back
+- [ ] 03-02-PLAN.md — Post-training inference validation, automated quality checks, Minta visual review
 
 ### Phase 4: Checkpoint Resume Tests
 **Goal**: Training can be interrupted and resumed without losing progress or corrupting the model
@@ -128,8 +129,8 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Fix Inference Pipeline | 2/2 | Complete | 2026-02-27 |
-| 2. Metrics Infrastructure | 1/2 | In progress | - |
-| 3. Expert Isolation Tests | 0/1 | Not started | - |
+| 2. Metrics Infrastructure | 2/2 | Complete | 2026-02-27 |
+| 3. Expert Isolation Tests | 0/2 | Not started | - |
 | 4. Checkpoint Resume Tests | 0/1 | Not started | - |
 | 5. Still Frame Training | 0/1 | Not started | - |
 | 6. Base Strategy Comparison | 0/2 | Not started | - |
