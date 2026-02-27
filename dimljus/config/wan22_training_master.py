@@ -432,9 +432,20 @@ T2V_SAMPLING_EVERY_N_EPOCHS: int = 5
 """Generate sample videos every N epochs. Matches save interval by
 default so you can see what each checkpoint looks like."""
 
-T2V_SAMPLING_PROMPTS: list[str] = []
-"""Positive prompts for sample generation. One video per prompt.
-Empty list = no samples even if enabled=True.
+T2V_SAMPLING_PROMPTS: list[str] = [
+    "A person stands still and looks directly at the camera, neutral expression, soft lighting",
+    "A cat walks across a wooden table, sunlight streaming through a window",
+    "Ocean waves crash against rocks on a rugged coastline, misty spray",
+    "A close-up of hands arranging colorful flowers in a glass vase",
+]
+"""Default prompts for sample generation. One video per prompt.
+Four scenarios covering key training quality dimensions:
+  1. Static person -- tests identity preservation and facial detail
+  2. Animal motion -- tests temporal coherence and natural movement
+  3. Scenic landscape -- tests composition and environment rendering
+  4. Close-up detail -- tests fine detail and texture quality
+
+Override with your own prompts in the YAML config. Empty list = no samples.
 
 Example:
   - "Annika walks through a sunlit garden"

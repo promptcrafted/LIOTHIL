@@ -349,3 +349,95 @@ class TestSaveResolvedConfig:
 
         path = save_resolved_config(FakeConfig(), deep_dir)
         assert path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Tests: log_samples_to_wandb
+# ---------------------------------------------------------------------------
+
+class TestLogSamplesToWandb:
+    """W&B media logging for sample videos and keyframe grids."""
+
+    def test_no_crash_without_wandb(self, tmp_path):
+        """log_samples_to_wandb does not crash when wandb_run is None."""
+        logger = TrainingLogger(backends=["console"])
+        assert logger._wandb_run is None
+        # Should silently return without error
+        video = tmp_path / "sample.mp4"
+        video.write_bytes(b"fake video data")
+        logger.log_samples_to_wandb(
+            sample_paths=[video],
+            phase_type="unified",
+            epoch=5,
+            global_step=100,
+        )
+
+    def test_no_crash_with_empty_paths(self):
+        """log_samples_to_wandb handles empty path list gracefully."""
+        logger = TrainingLogger(backends=["console"])
+        logger.log_samples_to_wandb(
+            sample_paths=[],
+            phase_type="high_noise",
+            epoch=1,
+            global_step=50,
+        )
+
+    def test_skips_missing_files(self, tmp_path):
+        """log_samples_to_wandb skips paths that don't exist on disk."""
+        logger = TrainingLogger(backends=["console"])
+        missing = tmp_path / "nonexistent.mp4"
+        # Should not crash even with non-existent files
+        logger.log_samples_to_wandb(
+            sample_paths=[missing],
+            phase_type="unified",
+            epoch=1,
+            global_step=10,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests: log_frozen_check
+# ---------------------------------------------------------------------------
+
+class TestLogFrozenCheck:
+    """Frozen-expert verification console logging."""
+
+    def test_prints_pass(self, capsys):
+        """log_frozen_check prints PASS for a passing result."""
+        logger = TrainingLogger(backends=["console"])
+
+        class FakeResult:
+            expert_name = "high_noise"
+            passed = True
+            details = "All good"
+
+        logger.log_frozen_check(FakeResult())
+        output = capsys.readouterr().out
+        assert "PASS" in output
+        assert "high_noise" in output
+
+    def test_prints_fail(self, capsys):
+        """log_frozen_check prints FAIL for a failing result."""
+        logger = TrainingLogger(backends=["console"])
+
+        class FakeResult:
+            expert_name = "low_noise"
+            passed = False
+            details = "Changed"
+
+        logger.log_frozen_check(FakeResult())
+        # FAIL goes to stderr
+        err = capsys.readouterr().err
+        assert "FAIL" in err
+        assert "low_noise" in err
+
+    def test_no_crash_without_wandb(self):
+        """log_frozen_check does not crash when wandb_run is None."""
+        logger = TrainingLogger(backends=["console"])
+
+        class FakeResult:
+            expert_name = "high_noise"
+            passed = True
+            details = "OK"
+
+        logger.log_frozen_check(FakeResult())  # Should not raise

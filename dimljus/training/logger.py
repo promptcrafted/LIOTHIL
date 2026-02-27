@@ -481,6 +481,100 @@ class TrainingLogger:
                     )
                     self._wandb_log_warned = True
 
+    def log_samples_to_wandb(
+        self,
+        sample_paths: list[Path],
+        phase_type: str,
+        epoch: int,
+        global_step: int,
+    ) -> None:
+        """Log sample videos and keyframe grids to W&B.
+
+        For each video path, logs:
+          - samples/{phase_type}/prompt_{i} as wandb.Video
+          - grids/{phase_type}/prompt_{i} as wandb.Image (if .grid.png exists)
+
+        This is the primary way Minta evaluates convergence during training.
+        Videos show temporal coherence and identity preservation; keyframe
+        grids give instant visual feedback without downloading video files.
+
+        Args:
+            sample_paths: List of paths to generated .mp4 sample files.
+            phase_type: Phase type value string (e.g. 'unified', 'high_noise').
+            epoch: Current epoch number (used in caption).
+            global_step: Global training step (used as W&B step).
+        """
+        if self._wandb_run is None:
+            return
+
+        try:
+            import wandb
+            log_dict: dict[str, Any] = {}
+
+            for i, video_path in enumerate(sample_paths):
+                if video_path.is_file():
+                    log_dict[f"samples/{phase_type}/prompt_{i}"] = wandb.Video(
+                        str(video_path), caption=f"epoch {epoch}", fps=16,
+                    )
+                # Check for keyframe grid alongside the video
+                grid_path = video_path.with_suffix(".grid.png")
+                if grid_path.is_file():
+                    log_dict[f"grids/{phase_type}/prompt_{i}"] = wandb.Image(
+                        str(grid_path), caption=f"epoch {epoch}",
+                    )
+
+            if log_dict:
+                wandb.log(log_dict, step=global_step)
+
+        except Exception as e:
+            if not self._wandb_log_warned:
+                print(
+                    f"  Warning: W&B sample logging failed ({e}).",
+                    file=sys.stderr,
+                )
+                self._wandb_log_warned = True
+
+    def log_frozen_check(self, result: Any) -> None:
+        """Log frozen-expert verification result to console and W&B.
+
+        Prints a clear PASS/FAIL message to the console so the user
+        immediately knows whether frozen expert integrity held. Also
+        logs to W&B summary for cross-run comparison.
+
+        Args:
+            result: VerificationResult from WeightVerifier.verify().
+                Must have .expert_name, .passed, and .details attributes.
+        """
+        expert_name = result.expert_name
+        passed = result.passed
+
+        # Console output -- always print, this is critical info
+        if "console" in self._backends:
+            if passed:
+                print(f"  Frozen expert check: {expert_name}: PASS")
+            else:
+                print(
+                    f"  Frozen expert check: {expert_name}: "
+                    f"FAIL (weights changed!)",
+                    file=sys.stderr,
+                )
+
+        # W&B summary -- visible in runs table for cross-run comparison
+        if self._wandb_run is not None:
+            try:
+                import wandb
+                status = "pass" if passed else "FAIL"
+                wandb.run.summary.update({
+                    f"frozen_check/{expert_name}": status,
+                })
+            except Exception as e:
+                if not self._wandb_log_warned:
+                    print(
+                        f"  Warning: W&B frozen check logging failed ({e}).",
+                        file=sys.stderr,
+                    )
+                    self._wandb_log_warned = True
+
     def log_checkpoint_saved(self, path: Path, phase_type: PhaseType, epoch: int) -> None:
         """Log a checkpoint save event.
 
