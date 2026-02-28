@@ -168,14 +168,28 @@ def main():
     sample_keys = list(lora_sd.keys())[:3]
     print(f"  Sample keys: {sample_keys}")
 
-    # The isolation LoRA is for low_noise expert = transformer_2 in diffusers
-    # Need to add "transformer_2." prefix for load_lora_weights()
+    # The isolation LoRA is for low_noise expert = transformer_2 in diffusers.
+    #
+    # CRITICAL DIFFUSERS QUIRK: WanPipeline.load_lora_weights() always looks
+    # for "transformer." as the key prefix to strip, even when loading into
+    # transformer_2. So we must:
+    #   1. Ensure keys have "transformer." prefix (not "transformer_2.")
+    #   2. Pass load_into_transformer_2=True to route to the right component
     from dimljus.training.wan.checkpoint_io import has_diffusers_prefix, add_diffusers_prefix
-    if not has_diffusers_prefix(lora_sd):
-        print("  Adding transformer_2. prefix (low-noise expert)...")
-        lora_sd = add_diffusers_prefix(lora_sd, prefix="transformer_2")
+    if has_diffusers_prefix(lora_sd):
+        # Replace transformer_2. prefix with transformer. prefix
+        fixed_sd = {}
+        for k, v in lora_sd.items():
+            new_k = k.replace("transformer_2.", "transformer.", 1)
+            fixed_sd[new_k] = v
+        lora_sd = fixed_sd
+        print("  Replaced transformer_2. prefix with transformer. (diffusers quirk)")
+    else:
+        print("  Adding transformer. prefix...")
+        lora_sd = add_diffusers_prefix(lora_sd, prefix="transformer")
 
-    pipeline.load_lora_weights(lora_sd, adapter_name="dimljus")
+    pipeline.load_lora_weights(lora_sd, adapter_name="dimljus",
+                               load_into_transformer_2=True)
     print(f"  LoRA applied in {time.time() - t0:.0f}s")
     print(f"  VRAM: {torch.cuda.memory_allocated() / 1024**3:.1f} GB")
 
