@@ -92,5 +92,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Plan 03-02 Task 1 -- inference script runs but output is noise. .eval() + guidance_scale_2 fixes attempted, not sufficient. Root cause unknown.
+Stopped at: Plan 03-02 COMPLETE. Inference fixed (diffusers 0.35.0 + transformers 4.57.6). All 4 LoRA inference tests pass. Test scripts committed with validated settings. Phase 3 ready to wrap up.
 Resume file: .planning/phases/03-expert-isolation-tests/.continue-here.md

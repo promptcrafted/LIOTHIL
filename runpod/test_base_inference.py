@@ -133,11 +133,11 @@ def main():
     GUIDANCE_SCALE = 4.0
 
     # ── Step 1: Load full pipeline from HF ─────────────────────────
-    # The from_pretrained() approach gets the correct T5, scheduler (UniPC),
-    # boundary_ratio (0.875), and text encoding pipeline. We then swap the
-    # transformers to our local from_single_file copies.
+    # The from_pretrained() approach gets the correct T5 and text encoding
+    # pipeline. We override the scheduler and boundary_ratio to our
+    # validated inference settings (FlowMatchEuler shift=5.0, boundary=0.6).
     print(f"Loading pipeline from {HF_REPO}...")
-    from diffusers import WanPipeline
+    from diffusers import WanPipeline, FlowMatchEulerDiscreteScheduler
     from diffusers.models import WanTransformer3DModel, AutoencoderKLWan
 
     pipeline = WanPipeline.from_pretrained(
@@ -145,6 +145,14 @@ def main():
     )
     # VAE in float32 for quality (official recommendation)
     pipeline.vae = pipeline.vae.to(dtype=torch.float32)
+
+    # Override scheduler: FlowMatchEuler shift=5.0 (validated, ComfyUI-aligned)
+    # HF default is UniPC shift=3.0 which produces lower quality output.
+    pipeline.scheduler = FlowMatchEulerDiscreteScheduler(shift=5.0)
+
+    # Override boundary_ratio: 0.6 for inference (HF default 0.875 is training value)
+    # 0.6 = high-noise expert handles first 60% of steps, low-noise handles last 40%
+    pipeline._internal_dict["boundary_ratio"] = 0.6
 
     # Fix T5 embed_tokens weight tying bug: the HF checkpoint stores the
     # token embedding as "shared.weight" but UMT5EncoderModel expects it
@@ -158,9 +166,8 @@ def main():
             print("  Fixed T5 embed_tokens weight tying (was zero-initialized)")
 
     print(f"  Pipeline loaded (from_pretrained)")
-    print(f"  Scheduler: {type(pipeline.scheduler).__name__}")
-    if hasattr(pipeline, 'boundary_ratio'):
-        print(f"  boundary_ratio: {pipeline.config.boundary_ratio}")
+    print(f"  Scheduler: {type(pipeline.scheduler).__name__} (shift=5.0)")
+    print(f"  boundary_ratio: 0.6 (inference)")
 
     # ── Step 2: Swap transformers to local from_single_file copies ──
     # This proves our local model files produce the same output as the
