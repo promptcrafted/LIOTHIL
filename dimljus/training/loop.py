@@ -1121,6 +1121,15 @@ class TrainingOrchestrator:
         # For expert phases, load the partner base model from disk.
         # This gives the pipeline both experts for coherent output.
         # The partner model is temporary — freed after sampling.
+        #
+        # ALWAYS load the partner in expert phases — even in isolation
+        # mode (no partner LoRA). Wan 2.2 experts are specialists: the
+        # low-noise expert can only denoise low-noise timesteps, the
+        # high-noise expert only high-noise timesteps. Without both
+        # experts, the pipeline produces pure noise because a single
+        # specialist can't handle the full denoising trajectory.
+        # The partner runs with base weights (no LoRA) which is fine
+        # for preview quality.  ~28GB extra VRAM — fits on 48GB+ GPUs.
         partner_model = None
         if phase.active_expert is not None:
             partner_model = self._load_partner_model(phase.active_expert)
