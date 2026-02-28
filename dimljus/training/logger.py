@@ -365,12 +365,14 @@ class TrainingLogger:
             for key, value in prefixed.items():
                 self._tb_writer.add_scalar(key, value, global_step)
 
-        # W&B
+        # W&B — use define_metric(step_metric="global_step") x-axis.
+        # Do NOT pass step= to wandb.log() — it conflicts with define_metric
+        # and causes empty graphs when log_every_n_steps skips steps.
         if self._wandb_run is not None:
             try:
                 import wandb
                 prefixed["global_step"] = global_step
-                wandb.log(prefixed, step=global_step)
+                wandb.log(prefixed)
             except Exception as e:
                 if not self._wandb_log_warned:
                     print(
@@ -396,12 +398,12 @@ class TrainingLogger:
             for key, value in metrics.items():
                 self._tb_writer.add_scalar(key, value, global_step)
 
-        # W&B
+        # W&B — same pattern as log_step: no step= parameter.
         if self._wandb_run is not None:
             try:
                 import wandb
                 metrics["global_step"] = global_step
-                wandb.log(metrics, step=global_step)
+                wandb.log(metrics)
             except Exception as e:
                 if not self._wandb_log_warned:
                     print(
@@ -527,7 +529,7 @@ class TrainingLogger:
 
             if log_dict:
                 log_dict["global_step"] = global_step
-                wandb.log(log_dict, step=global_step)
+                wandb.log(log_dict)
 
         except Exception as e:
             if not self._wandb_log_warned:

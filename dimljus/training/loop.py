@@ -1096,6 +1096,12 @@ class TrainingOrchestrator:
     ) -> None:
         """Generate sample previews.
 
+        For expert phases (high_noise / low_noise), loads the partner
+        expert's base model from disk so the pipeline can generate with
+        both experts active — producing coherent dual-expert output.
+        The partner model is freed immediately after sampling to reclaim
+        VRAM.
+
         Args:
             phase: Current training phase.
             epoch: Current epoch number.
@@ -1112,6 +1118,13 @@ class TrainingOrchestrator:
             unified_path=self._checkpoint_mgr.find_latest_checkpoint(PhaseType.UNIFIED),
         )
 
+        # For expert phases, load the partner base model from disk.
+        # This gives the pipeline both experts for coherent output.
+        # The partner model is temporary — freed after sampling.
+        partner_model = None
+        if phase.active_expert is not None:
+            partner_model = self._load_partner_model(phase.active_expert)
+
         try:
             # Extract live LoRA weights from PEFT model (not stale lora.state_dict)
             try:
@@ -1126,6 +1139,8 @@ class TrainingOrchestrator:
                 lora_state_dict=live_state_dict,
                 phase_type=phase.phase_type,
                 epoch=epoch,
+                partner_model=partner_model,
+                active_expert=phase.active_expert,
             )
             for i, path in enumerate(samples):
                 self._logger.log_sample_generated(path, i)
@@ -1141,6 +1156,85 @@ class TrainingOrchestrator:
         except Exception as e:
             # Sampling failure shouldn't crash training, but log a warning
             print(f"  Warning: Sampling failed (training continues): {e}")
+        finally:
+            # Free partner model VRAM regardless of success/failure
+            if partner_model is not None:
+                del partner_model
+                import gc
+                gc.collect()
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except ImportError:
+                    pass
+
+    def _load_partner_model(self, active_expert: str) -> Any:
+        """Load the partner expert's base model from disk for sampling.
+
+        During expert training, only one expert is on GPU. For sampling
+        we need both experts to produce coherent output. This loads the
+        other expert temporarily from disk.
+
+        Diffusers convention:
+            transformer   = HIGH-noise expert
+            transformer_2 = LOW-noise expert
+
+        So if training low_noise, the partner is high_noise (and vice versa).
+
+        Args:
+            active_expert: The expert currently being trained
+                ('high_noise' or 'low_noise').
+
+        Returns:
+            Loaded WanTransformer3DModel on GPU, or None if loading fails.
+        """
+        # Determine which expert to load as partner
+        partner_expert = (
+            "low_noise" if active_expert == "high_noise" else "high_noise"
+        )
+
+        # Get the file path from the backend's configured paths
+        partner_file = self._backend._resolve_single_file_path(partner_expert)
+        if partner_file is None:
+            print(
+                f"  Warning: No file path for partner expert '{partner_expert}'. "
+                f"Sampling with single expert only."
+            )
+            return None
+
+        try:
+            import torch
+            from diffusers import WanTransformer3DModel
+
+            print(f"  Loading partner expert ({partner_expert}) for sampling...")
+
+            # Use the same loading pattern as the backend — config= and
+            # subfolder= are required for Wan 2.2 to avoid loading Wan 2.1
+            # config silently (diffusers#12329).
+            subfolder = self._backend._resolve_config_subfolder(partner_expert)
+            model = WanTransformer3DModel.from_single_file(
+                partner_file,
+                torch_dtype=torch.bfloat16,
+                device="cpu",
+                config="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+                subfolder=subfolder,
+            )
+
+            # Move to GPU
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            model.to(device)
+            model.eval()
+
+            print(f"  Partner expert loaded.")
+            return model
+
+        except Exception as e:
+            print(
+                f"  Warning: Could not load partner expert ({e}). "
+                f"Sampling with single expert only."
+            )
+            return None
 
     # ------------------------------------------------------------------
     # Final output
