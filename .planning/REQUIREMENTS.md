@@ -15,8 +15,8 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Training Isolation
 
-- [ ] **TRAIN-01**: Low-noise-only training (no unified, no high) completes without crash and produces checkpoints
-- [ ] **TRAIN-02**: High-noise-only training (no unified, no low) completes without crash and produces checkpoints
+- [x] **TRAIN-01**: Low-noise-only training (no unified, no high) completes without crash and produces checkpoints
+- [x] **TRAIN-02**: High-noise-only training (no unified, no low) completes without crash and produces checkpoints
 - [ ] **TRAIN-03**: Checkpoint resume for unified training continues from saved state without loss spike
 - [ ] **TRAIN-04**: Checkpoint resume for low-noise training continues from saved state without loss spike
 - [ ] **TRAIN-05**: Checkpoint resume for high-noise training continues from saved state without loss spike
@@ -87,8 +87,8 @@ Deferred to future milestone. Tracked but not in current roadmap.
 | METR-04 | Phase 2 | Complete |
 | METR-05 | Phase 2 | Complete |
 | METR-06 | Phase 2 | Complete |
-| TRAIN-01 | Phase 3 | Pending |
-| TRAIN-02 | Phase 3 | Pending |
+| TRAIN-01 | Phase 3 | Complete |
+| TRAIN-02 | Phase 3 | Complete |
 | TRAIN-03 | Phase 4 | Pending |
 | TRAIN-04 | Phase 4 | Pending |
 | TRAIN-05 | Phase 4 | Pending |
@@ -107,4 +107,4 @@ Deferred to future milestone. Tracked but not in current roadmap.
 
 ---
 *Requirements defined: 2026-02-26*
-*Last updated: 2026-02-27 -- METR-01 through METR-04 completed in Plan 02-01*
+*Last updated: 2026-02-28 -- TRAIN-01 and TRAIN-02 completed in Plan 03-01*

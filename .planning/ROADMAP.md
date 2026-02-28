@@ -130,7 +130,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 |-------|----------------|--------|-----------|
 | 1. Fix Inference Pipeline | 2/2 | Complete | 2026-02-27 |
 | 2. Metrics Infrastructure | 2/2 | Complete | 2026-02-27 |
-| 3. Expert Isolation Tests | 0/2 | Not started | - |
+| 3. Expert Isolation Tests | 1/2 | In progress | - |
 | 4. Checkpoint Resume Tests | 0/1 | Not started | - |
 | 5. Still Frame Training | 0/1 | Not started | - |
 | 6. Base Strategy Comparison | 0/2 | Not started | - |
