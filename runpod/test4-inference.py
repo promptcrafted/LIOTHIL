@@ -56,6 +56,7 @@ PROMPTS = [
 NEG_PROMPT = "blurry, low quality, distorted"
 STEPS = 30
 CFG = 4.0
+CFG_2 = 3.0       # Low-noise expert uses slightly lower CFG (from test3)
 SHIFT = 5.0       # FlowMatchEulerDiscreteScheduler shift
 BOUNDARY = 0.6    # Inference boundary (NOT 0.875 training boundary)
 HEIGHT = 480
@@ -318,12 +319,12 @@ def main():
     model_high = WanTransformer3DModel.from_single_file(
         MODEL_HIGH, torch_dtype=torch.bfloat16,
         config=HF_REPO, subfolder="transformer",
-    )
+    ).to("cuda").eval()
     # Low-noise expert = transformer_2 (handles late denoising steps)
     model_low = WanTransformer3DModel.from_single_file(
         MODEL_LOW, torch_dtype=torch.bfloat16,
         config=HF_REPO, subfolder="transformer_2",
-    )
+    ).to("cuda").eval()
     # VAE (must be float32 for stable decoding)
     vae = AutoencoderKLWan.from_single_file(
         VAE_PATH, torch_dtype=torch.float32
@@ -370,6 +371,7 @@ def main():
                 negative_prompt_embeds=neg_embeds,
                 num_inference_steps=STEPS,
                 guidance_scale=CFG,
+                guidance_scale_2=CFG_2,
                 height=HEIGHT, width=WIDTH, num_frames=NUM_FRAMES,
                 generator=generator,
             )
@@ -454,6 +456,7 @@ def main():
                 negative_prompt_embeds=neg_embeds,
                 num_inference_steps=STEPS,
                 guidance_scale=CFG,
+                guidance_scale_2=CFG_2,
                 height=HEIGHT, width=WIDTH, num_frames=NUM_FRAMES,
                 generator=generator,
             )
@@ -521,6 +524,7 @@ def main():
                 negative_prompt_embeds=neg_embeds,
                 num_inference_steps=STEPS,
                 guidance_scale=CFG,
+                guidance_scale_2=CFG_2,
                 height=HEIGHT, width=WIDTH, num_frames=NUM_FRAMES,
                 generator=generator,
             )
