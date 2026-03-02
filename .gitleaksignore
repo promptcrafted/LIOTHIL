@@ -1,6 +1,6 @@
 # Gitleaks allowlist
 # Add fingerprints of known false positives here.
 # Format: one fingerprint per line (from gitleaks output)
-#
-# Example:
-# abc123def456  # Example API key in documentation
+
+# False positive: model parameter (boundary=0.6) in verification doc
+6cb0fefe80fa4cb9ce2e0394f923e49b3250e82b:.planning/phases/01-fix-inference-pipeline/01-VERIFICATION.md:generic-api-key:58
